@@ -8,6 +8,10 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      # The oxc crates must share one version, and each 0.x bump counts as
+      # major, so they get a group of their own.
+      oxc:
+        patterns: ["oxc*"]
       crates:
         update-types: [minor, patch]
   # The pinned actions in .github/workflows.
