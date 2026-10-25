@@ -1,0 +1,19 @@
+[
+  {"name": "event_timestamp", "type": "TIMESTAMP", "mode": "REQUIRED"},
+  {"name": "event_name", "type": "STRING"},
+  {"name": "event_id", "type": "STRING"},
+  {"name": "measurement_id", "type": "STRING"},
+  {"name": "client_id", "type": "STRING"},
+  {"name": "user_id", "type": "STRING"},
+  {"name": "session_id", "type": "STRING"},
+  {"name": "page_location", "type": "STRING"},
+  {"name": "page_referrer", "type": "STRING"},
+  {"name": "page_title", "type": "STRING"},
+  {"name": "value", "type": "FLOAT64"},
+  {"name": "currency", "type": "STRING"},
+  {"name": "transaction_id", "type": "STRING"},
+  {"name": "items", "type": "STRING"},
+  {"name": "user_agent", "type": "STRING"},
+  {"name": "consent", "type": "STRING"},
+  {"name": "event_data", "type": "STRING"}
+]

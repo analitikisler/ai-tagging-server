@@ -1,0 +1,55 @@
+name: Bug report
+description: Something doesn't work as the README says it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please leave out tokens, API keys, real measurement ids and visitors' data; use placeholders such as `G-TEST000001` and `example.com`.
+        For a security problem, don't open an issue: see [SECURITY.md](https://github.com/analitikisler/ai-tagging-server/blob/main/SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The smallest setup that shows it, e.g. a container file and a `curl` hit. The `__debug` report (with `DEBUG_TOKEN`) or the console's trace of the hit helps a lot.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release or commit, as shown at the bottom of the admin console or by `GET /system`.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How the server runs
+      options:
+        - Built-in container (environment variables)
+        - Container file (CONTAINER_FILE)
+        - Several sites (TENANTS_FILE)
+        - Integrations (INTEGRATIONS_FILE)
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it runs
+      options:
+        - Cloud Run behind Cloudflare (deploy/ scripts)
+        - Docker
+        - Built from source
+        - Somewhere else
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The server's log lines around the problem, with secrets removed.
+      render: text

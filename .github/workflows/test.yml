@@ -1,0 +1,74 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly, so advisories published since the last push show up.
+  schedule:
+    - cron: '0 6 * * 1'
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+
+  # Known vulnerabilities in Cargo.lock, from the RustSec advisory database.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+
+  # The console and the Cloudflare Worker are JavaScript the Rust tests
+  # don't parse; a syntax error in either would only show in a browser.
+  javascript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the console script
+        run: |
+          python3 - <<'EOF'
+          import re, subprocess, sys
+          html = open('src/ui/console.html').read()
+          scripts = re.findall(r'<script(?![^>]*src)[^>]*>(.*?)</script>', html, re.S)
+          if not scripts:
+              sys.exit('no inline script in src/ui/console.html')
+          for i, s in enumerate(scripts):
+              path = f'/tmp/console-{i}.js'
+              open(path, 'w').write(s)
+              subprocess.run(['node', '--check', path], check=True)
+          EOF
+      - name: Check the Cloudflare Worker
+        run: node --input-type=module -e "import('./deploy/cloudflare/worker.js').then((m) => { if (typeof m.default.fetch !== 'function') process.exit(1); })"
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build -t tagging-server .
+      - name: Start it and send a hit
+        run: |
+          docker run -d --name ts -p 8080:8080 -e MEASUREMENT_IDS=G-TEST000001 tagging-server
+          for i in $(seq 1 30); do curl -sf http://localhost:8080/health && break; sleep 1; done
+          code=$(curl -s -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' \
+            'http://localhost:8080/g/collect?v=2&tid=G-TEST000001&cid=1.2&en=page_view&dl=https%3A%2F%2Fexample.com%2F')
+          docker logs ts
+          test "$code" = 204

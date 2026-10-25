@@ -1,0 +1,26 @@
+{
+  "version": "example-1",
+  "templates": {
+    "purchase_logger": {
+      "file": "templates/purchase_logger.js",
+      "permissions": {
+        "read_event_data": { "keys": ["transaction_id", "value", "currency"] },
+        "logging": {}
+      }
+    }
+  },
+  "clients": [
+    { "name": "GA4", "template": "ga4_client", "data": { "extendGaCookie": true } }
+  ],
+  "tags": [
+    { "name": "GA4", "template": "ga4_tag" },
+    {
+      "name": "Log purchases",
+      "template": "purchase_logger",
+      "fire_when": [
+        { "key": "event_name", "op": "equals", "value": "purchase" },
+        { "key": "page_location", "op": "matches_regex", "value": "^https://example\\.com/" }
+      ]
+    }
+  ]
+}

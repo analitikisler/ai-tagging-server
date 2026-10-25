@@ -1,0 +1,36 @@
+name: Feature request
+description: Something the server should do, or do better.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you're trying to do and what gets in the way today. A real example helps more than a proposed solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like
+      description: How you imagine it working, if you have an idea. Mention any other tool that does it well.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - GA4 client or tag
+        - Ad platform tags (Meta, TikTok, Pinterest, Google Ads)
+        - Templates and the sandbox
+        - Admin console
+        - AI features
+        - Setup check, alerts or history
+        - Deploying and running
+        - Docs
+        - Something else
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to build this myself (see CONTRIBUTING.md).

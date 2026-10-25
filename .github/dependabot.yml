@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # Rust crates. Minor and patch updates come as one pull request a week;
+  # security updates come right away, on their own.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      crates:
+        update-types: [minor, patch]
+  # The pinned actions in .github/workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  # The Dockerfile's base image.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
