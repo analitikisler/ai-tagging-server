@@ -494,6 +494,12 @@ Not yet: loading a container exported from Google Tag Manager.
 
 Cloud Run's own request logs keep each full request URL, including hit parameters, for 30 days. The server's log line drops the query. To keep the platform log from storing hit parameters, exclude `run.googleapis.com/requests` for this service in Cloud Logging, or mention it in your privacy notice.
 
+### Upgrading
+
+Deploy the Worker from the same release before the server, and keep its `PATH_PREFIX`. The server builds the address of the Google scripts it serves (`gtm.js` points the Google tag at it) from the forwarded host and the Worker's `x-forwarded-prefix` header. Without that header it assumes the server runs at the root. An older Worker that doesn't send the header leaves the Google tag loading from `https://your-site/gtag/js`, which returns `404`, and GA4 stops.
+
+To check a new server version before it takes traffic, deploy it with `--no-traffic --tag next` and request `gtm.js` from the tag's address with the headers the Worker sends (`x-proxy-secret`, `x-forwarded-host`, `x-forwarded-prefix`). The Google tag's address in the answer (`"3":"your-site/k7q2"`) must include your path. `gtm.js` is cached for 4 hours, by Cloudflare and by browsers, so a wrong copy outlives a rollback. Cloudflare keeps the Worker's fetches under the Cloud Run URL, so purge that URL, or switch `ORIGIN_URL` to the service's other address, to drop it.
+
 ## Behind Cloudflare
 
 `getRemoteAddress()` and the GA4 events use the first of `CF-Connecting-IP`, `X-Real-IP`, the left-most `X-Forwarded-For` entry and the socket address. The location headers `visitorInfo` reads are trusted the same way. Make sure only your proxy can reach the server (`PROXY_SECRET`), so visitors can't set these headers themselves.
