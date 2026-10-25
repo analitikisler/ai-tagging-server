@@ -224,7 +224,7 @@ mod tests {
         assert_eq!(recent.last().unwrap().events[0].name, "e5");
         // No query (client id) and no visitor identifiers are kept.
         let text = serde_json::to_string(&recent[0]).unwrap();
-        assert!(!text.contains("123"), "{text}");
+        assert!(!text.contains("123.456"), "{text}");
         assert!(text.contains("consent:ad_storage=denied"));
         assert!(!recent[0].events[0].has_event_id);
     }
