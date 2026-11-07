@@ -336,7 +336,13 @@ pub struct App {
     pub counts: Option<Arc<crate::counts::Recorder>>,
     /// Recent hits for the admin page, when it shows them.
     pub log: Option<Arc<EventLog>>,
+    /// Names the server in a header on every tracking response, so
+    /// debuggers can tell which server container a site runs.
+    pub identify: bool,
 }
+
+/// The header that names the server on tracking responses (`SERVER_HEADER`).
+pub const SERVER_HEADER: (&str, &str) = ("x-tagging-server", "ai-tagging-server");
 
 /// The cookie that keeps a browser on the draft while it previews.
 pub const PREVIEW_COOKIE: &str = "_sst_check";
@@ -587,6 +593,12 @@ async fn handle(
         if let (Ok(k), Ok(v)) = (HeaderName::try_from(k), HeaderValue::try_from(v)) {
             res.headers_mut().append(k, v);
         }
+    }
+    if app.identify {
+        res.headers_mut().insert(
+            HeaderName::from_static(SERVER_HEADER.0),
+            HeaderValue::from_static(SERVER_HEADER.1),
+        );
     }
     res
 }
@@ -966,6 +978,7 @@ mod tests {
             debug_token: None,
             proxy_secret: None,
             counts: Some(counts.clone()),
+            identify: true,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -989,9 +1002,10 @@ mod tests {
             r.send()
         };
 
-        // An ordinary visitor: live, one GA4 send.
-        hit("https%3A%2F%2Fshop%2F", None).await.unwrap();
+        // An ordinary visitor: live, one GA4 send, and the response names the server.
+        let r = hit("https%3A%2F%2Fshop%2F", None).await.unwrap();
         assert_eq!(sent.0.lock().unwrap().len(), 1);
+        assert_eq!(r.headers()["x-tagging-server"], "ai-tagging-server");
 
         // The preview link: the draft runs (two tags), nothing is sent, and a cookie keeps it on.
         let r = hit("https%3A%2F%2Fshop%2F%3Fsst_check%3Dab12cd34", None)

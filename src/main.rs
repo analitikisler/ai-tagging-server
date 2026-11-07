@@ -369,6 +369,7 @@ async fn main() {
         proxy_secret: proxy_secret.clone(),
         counts: counts.clone(),
         log,
+        identify: env("SERVER_HEADER", 1u8) != 0,
     };
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
