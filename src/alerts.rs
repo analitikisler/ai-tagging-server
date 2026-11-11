@@ -39,6 +39,8 @@ const REPEAT_MS: u64 = 3_600_000;
 const RELATED_MS: u64 = 3 * 3_600_000;
 /// Resolved alerts kept for the console.
 const KEEP_RESOLVED: usize = 100;
+/// How long an alert stays open while its condition can't be judged.
+const QUIET_MS: u64 = 24 * 3_600_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
@@ -107,8 +109,23 @@ fn simplified(name: &str) -> String {
 
 /// The problems in one site's last hour, `now`, against the same hour on
 /// earlier days that had hits, `base`.
+#[cfg(test)]
 pub fn evaluate(site: &str, now: &Counts, base: &[Counts], cfg: &Config) -> Vec<Finding> {
+    judge(site, now, base, cfg).0
+}
+
+/// The problems, and the ids of every condition there was enough traffic to
+/// judge, found or not. An open alert whose condition could not be judged
+/// (a quiet night, a tag that didn't run) is not known to be over.
+fn judge(
+    site: &str,
+    now: &Counts,
+    base: &[Counts],
+    cfg: &Config,
+) -> (Vec<Finding>, BTreeSet<String>) {
     let mut out = Vec::new();
+    let mut judged = BTreeSet::new();
+    let id = |kind: &str, subject: &str| format!("{kind}|{site}|{subject}");
     let learning = base.len() < LEARNING_DAYS;
     let f = |kind, subject: String, severity, numbers| Finding {
         kind,
@@ -127,6 +144,8 @@ pub fn evaluate(site: &str, now: &Counts, base: &[Counts], cfg: &Config) -> Vec<
             if u < 10.0 {
                 continue;
             }
+            judged.insert(id("event_stopped", e));
+            judged.insert(id("event_drop", e));
             if n == 0.0 {
                 out.push(f(
                     "event_stopped",
@@ -161,6 +180,7 @@ pub fn evaluate(site: &str, now: &Counts, base: &[Counts], cfg: &Config) -> Vec<
         if s.sends < 20 {
             continue;
         }
+        judged.insert(id("vendor_failing", host));
         let rate = ratio(s.failed, s.sends);
         let u = pooled(&|c| c.hosts.get(host).map_or((0, 0), |h| (h.failed, h.sends)));
         if raised(rate, u, 0.02) {
@@ -182,15 +202,24 @@ pub fn evaluate(site: &str, now: &Counts, base: &[Counts], cfg: &Config) -> Vec<
         }
     }
     for (tag, r) in &now.tags {
-        if r.runs < 20 {
+        // Runs that skipped their event (no consent, an event the platform
+        // doesn't use) tried nothing, so they are not what a failure rate is
+        // a share of.
+        let tried = r.runs.saturating_sub(r.skipped);
+        if tried < 20 {
             continue;
         }
-        let rate = ratio(r.failed, r.runs);
-        let u = pooled(&|c| c.tags.get(tag).map_or((0, 0), |t| (t.failed, t.runs)));
+        judged.insert(id("tag_failing", tag));
+        let rate = ratio(r.failed, tried);
+        let u = pooled(&|c| {
+            c.tags
+                .get(tag)
+                .map_or((0, 0), |t| (t.failed, t.runs.saturating_sub(t.skipped)))
+        });
         if raised(rate, u, 0.02) {
             let severity = if rate >= 0.5 { "problem" } else { "warning" };
             out.push(f("tag_failing", tag.clone(), severity, json!({
-                "failed": r.failed, "runs": r.runs, "rate_pct": round(rate * 100.0), "usual_pct": round(u * 100.0),
+                "failed": r.failed, "runs": tried, "rate_pct": round(rate * 100.0), "usual_pct": round(u * 100.0),
             })));
         }
     }
@@ -221,6 +250,7 @@ pub fn evaluate(site: &str, now: &Counts, base: &[Counts], cfg: &Config) -> Vec<
                     .copied()
                     .unwrap_or(0)
             };
+            judged.insert(id("missing_value", &format!("{e}.{k}")));
             let rate = ratio(miss(now), n);
             let u = pooled(&|c| (miss(c), c.events.get(e).copied().unwrap_or(0)));
             if raised(rate, u, 0.05) {
@@ -232,6 +262,7 @@ pub fn evaluate(site: &str, now: &Counts, base: &[Counts], cfg: &Config) -> Vec<
     }
 
     if now.hits >= 20 {
+        judged.insert(id("unclaimed", ""));
         let rate = ratio(now.unclaimed, now.hits);
         let u = pooled(&|c| (c.unclaimed, c.hits));
         if raised(rate, u, 0.05) {
@@ -263,7 +294,7 @@ pub fn evaluate(site: &str, now: &Counts, base: &[Counts], cfg: &Config) -> Vec<
             }
         }
     }
-    out
+    (out, judged)
 }
 
 /// An alert's title and text, in English or Turkish.
@@ -567,7 +598,11 @@ impl Alerts {
     }
 
     /// The findings for the last hour, and each site's days of history.
-    fn find(state: &State, cfg: &Config, now_q: u64) -> (Vec<Finding>, BTreeMap<String, usize>) {
+    fn find(
+        state: &State,
+        cfg: &Config,
+        now_q: u64,
+    ) -> (Vec<Finding>, BTreeSet<String>, BTreeMap<String, usize>) {
         roll_up(state, now_q / QUARTERS_PER_DAY);
         let mut r = Reader::new(state);
         let window: Vec<u64> = (now_q.saturating_sub(WINDOW)..now_q).collect();
@@ -586,6 +621,7 @@ impl Alerts {
             .chain(days.iter().flat_map(|d| d.keys()))
             .collect();
         let mut findings = Vec::new();
+        let mut judged = BTreeSet::new();
         let mut history = BTreeMap::new();
         for site in sites {
             let base: Vec<Counts> = days
@@ -596,9 +632,11 @@ impl Alerts {
                 .collect();
             history.insert(site.clone(), base.len());
             let empty = Counts::default();
-            findings.extend(evaluate(site, now.get(site).unwrap_or(&empty), &base, cfg));
+            let (found, could) = judge(site, now.get(site).unwrap_or(&empty), &base, cfg);
+            findings.extend(found);
+            judged.extend(could);
         }
-        (findings, history)
+        (findings, judged, history)
     }
 
     /// Runs the checks, opens and resolves alerts, and posts to Slack.
@@ -619,11 +657,11 @@ impl Alerts {
         let state = self.state.clone();
         let cfg2 = cfg.clone();
         let now_q = quarter_now();
-        let (findings, days) =
+        let (findings, judged, days) =
             tokio::task::spawn_blocking(move || Self::find(&state, &cfg2, now_q))
                 .await
                 .unwrap_or_default();
-        let result = self.reconcile(findings, &days, &cfg, ctx).await;
+        let result = self.reconcile(findings, &judged, &days, &cfg, ctx).await;
         // Only our own lock: a slow check's may have run out and been taken.
         if self
             .state
@@ -638,6 +676,7 @@ impl Alerts {
     async fn reconcile(
         &self,
         findings: Vec<Finding>,
+        judged: &BTreeSet<String>,
         days: &BTreeMap<String, usize>,
         cfg: &Config,
         ctx: Context<'_>,
@@ -652,7 +691,13 @@ impl Alerts {
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
         let mut recent: Vec<Value> = s["recent"].as_array().cloned().unwrap_or_default();
-        let mut posts: Vec<String> = Vec::new();
+        // Messages Slack didn't take last time go out first.
+        let mut posts: Vec<String> = s["unsent"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| p.as_str().map(str::to_string))
+            .collect();
         let (mut opened, mut resolved, mut explained) = (0, 0, 0);
         let found: BTreeSet<String> = findings.iter().map(Finding::id).collect();
 
@@ -665,7 +710,17 @@ impl Alerts {
             let texts = json!({ "en": { "title": en.0, "text": en.1 }, "tr": { "title": tr.0, "text": tr.1 } });
             match open.get_mut(&id) {
                 Some(a) => {
-                    let worse = a["severity"] == "warning" && f.severity == "problem";
+                    // Against what Slack was last told, so a warning that
+                    // turns into a problem within the hour is still posted
+                    // once the hour is up.
+                    let told = a["notified_severity"]
+                        .as_str()
+                        .or(a["severity"].as_str())
+                        .unwrap_or_default();
+                    let worse = told == "warning" && f.severity == "problem";
+                    if a["notified_severity"].is_null() {
+                        a["notified_severity"] = a["severity"].clone();
+                    }
                     a["severity"] = json!(f.severity);
                     a["numbers"] = f.numbers.clone();
                     a["texts"] = texts;
@@ -674,6 +729,7 @@ impl Alerts {
                         && now.saturating_sub(a["notified_at"].as_u64().unwrap_or(0)) >= REPEAT_MS
                     {
                         a["notified_at"] = json!(now);
+                        a["notified_severity"] = json!(f.severity);
                         posts.push(self.post_text(a, cfg, "worse"));
                     }
                 }
@@ -696,6 +752,7 @@ impl Alerts {
                         "id": id, "kind": f.kind, "site": f.site, "subject": f.subject,
                         "severity": f.severity, "numbers": f.numbers, "texts": texts,
                         "started_at": now, "updated_at": now, "notified_at": now,
+                        "notified_severity": f.severity,
                         "related": related, "diagnosis": null,
                     });
                     if let Some(explain) = ctx.explain.filter(|_| explained < 3) {
@@ -708,10 +765,18 @@ impl Alerts {
                 }
             }
         }
+        // An alert is over when its condition was judged and not found. One
+        // that couldn't be judged (too little traffic this hour) stays open,
+        // for a day at most since it was last seen.
         let gone: Vec<String> = open
-            .keys()
-            .filter(|k| !found.contains(*k))
-            .cloned()
+            .iter()
+            .filter(|(id, a)| {
+                !found.contains(*id)
+                    && (judged.contains(*id)
+                        || a["kind"] == "name_changed"
+                        || now.saturating_sub(a["updated_at"].as_u64().unwrap_or(0)) >= QUIET_MS)
+            })
+            .map(|(id, _)| id.clone())
             .collect();
         for id in gone {
             if let Some(mut a) = open.remove(&id) {
@@ -723,7 +788,8 @@ impl Alerts {
         }
         recent.truncate(KEEP_RESOLVED);
 
-        let (sent, slack_error) = self.post_all(posts, cfg).await;
+        let (sent, slack_error, unsent) = self.post_all(posts, cfg).await;
+        s["unsent"] = json!(unsent);
         let learning: Vec<&String> = days
             .iter()
             .filter(|(_, n)| **n < LEARNING_DAYS)
@@ -817,9 +883,15 @@ impl Alerts {
         out
     }
 
-    async fn post_all(&self, mut posts: Vec<String>, cfg: &Config) -> (usize, Option<String>) {
+    /// Posts the messages in order. After a failure the rest wait for the
+    /// next check, where they go out first.
+    async fn post_all(
+        &self,
+        mut posts: Vec<String>,
+        cfg: &Config,
+    ) -> (usize, Option<String>, Vec<String>) {
         if self.slack.is_none() || posts.is_empty() {
-            return (0, None);
+            return (0, None, Vec::new());
         }
         if posts.len() > MAX_MESSAGES {
             let more = posts.len() - (MAX_MESSAGES - 1);
@@ -831,16 +903,14 @@ impl Alerts {
             });
         }
         let mut sent = 0;
-        for p in posts {
-            match self.post(&p).await {
-                Ok(()) => sent += 1,
-                Err(e) => {
-                    tracing::warn!("alerts: Slack: {e}");
-                    return (sent, Some(e));
-                }
+        while sent < posts.len() {
+            if let Err(e) = self.post(&posts[sent]).await {
+                tracing::warn!("alerts: Slack: {e}");
+                return (sent, Some(e), posts.split_off(sent));
             }
+            sent += 1;
         }
-        (sent, None)
+        (sent, None, Vec::new())
     }
 
     /// Posts one message to the Slack webhook.
