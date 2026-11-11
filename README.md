@@ -126,7 +126,7 @@ It prints requests per second and latency percentiles. Every hit counts in the p
 
 ## AI features
 
-Set `ANTHROPIC_API_KEY` (with `ADMIN_TOKEN`) and the admin console gets an AI that works on the setup and never on the hits: no hit waits for it or pays for it. It answers only when someone clicks, and it never changes the container. A suggested tag change opens in the tag editor, filled in and not saved, for you to check and save.
+Set `ANTHROPIC_API_KEY` (with `ADMIN_TOKEN`) and the admin console gets an AI that works on the setup and never on the hits: no hit waits for it or pays for it. It answers only when someone clicks, apart from a short likely cause for each new [alert](#alerts-history-and-safe-changes) (three per check at most), and it never changes the container. A suggested tag change opens in the tag editor, filled in and not saved, for you to check and save.
 
 - **Explain a hit.** In Live, a hit's Summary has "Explain with AI": the AI reads the trace and the container and says whether the hit went as it should, which condition stopped a tag, what a vendor's refusal means, and what to change. One call, a few cents; asking again about the same hit and container is free.
 - **AI audit.** A page under Debug. The server counts the trace buffer itself (each tag's runs, sends by event, tags that never fired, several tags sending one hit to the same vendor, sends a vendor keeps refusing) and the AI picks and explains the findings: dead tags, duplicate sends, events a platform doesn't use, failing sends. What each finding saves, in sends per 1,000 hits, is worked out by the server from the counts, not by the model. One call, around 10 to 25 cents.
@@ -144,7 +144,7 @@ What the AI is sent: the trace as the console shows it (plain user data already 
 With `CONTAINER_FILE` and the admin console, edits don't go live as they are saved. They collect in a **draft**, kept in the state folder, like a GTM workspace: the console shows and edits the draft, with a bar listing what it changes against live. Each edit still gets the check against recent and pinned hits.
 
 - **Publish** puts the whole draft live as a named version, with a note, after the same check against live. A draft started before live changed (another publish, a hand edit to the file) is only published over that change when you confirm. Every instance runs the new version within a few seconds.
-- **Preview** the draft in one browser: on the Setup check page, "Preview the draft" gives a code; opening the site with `?sst_check=<code>` makes that browser run the draft, and a `_sst_check` cookie keeps its next pages on the draft for 4 hours. Everyone else keeps the live container. Sends are dry unless you choose "Send for real": the draft runs fully, but nothing reaches the platforms. The live check shows that browser's hits and gives the draft's test result for a conversion. Preview hits show as `preview` in the debugger and stay out of the counts behind alerts and the setup check.
+- **Preview** the draft in one browser: on the Setup check page, "Preview the draft" gives a code; opening the site with `?sst_check=<code>` makes that browser run the draft, and a `_sst_check` cookie keeps its next pages on the draft for 4 hours. Everyone else keeps the live container. Sends are dry unless you choose "Send for real": the draft runs fully, but nothing reaches the platforms (Google's own scripts are still fetched, so the page's tags load). A preview's answers are never cacheable. The live check shows that browser's hits and gives the draft's test result for a conversion. Preview hits show as `preview` in the debugger and stay out of the counts behind alerts and the setup check.
 - **Discard** drops the draft. **Rollback**: History lists each published version; Undo puts live back to before one.
 
 `POST /admin/api/container/publish` (`{ "revision", "name", "note", "force" }`, `"check": true` for the check), `DELETE /admin/api/container/draft`, and `POST /admin/api/checkup/live` with `{ "preview": true, "send": false }`. Edits through the API go to the draft the same way.
@@ -253,6 +253,10 @@ With `ADMIN_TOKEN` set, `/admin` serves the console: a debugger for recent hits 
 | `PUT /admin/api/container/setup` | Replaces every tag and transformation (`{ "revision", "tags": [...], "transformations": [...] }`). |
 | `POST /admin/api/ai/review?lang=en\|tr` | With the AI on: reviews a change's check result (`{ "edits", "replay" }`). |
 | `POST /admin/api/ai/audit?lang=en\|tr` | With the AI on: audits the container against the trace buffer (`&tenant=<id>` with tenants). |
+| `GET /admin/api/integrations` | With `INTEGRATIONS_FILE`: each platform's fields (secrets never returned, only whether they are set), the enrichment settings and the events a test can send. |
+| `PUT /admin/api/integrations/<id>` | Saves one platform (`{ "enabled", "fields": { ... } }`). A secret sent empty keeps the stored one. |
+| `POST /admin/api/integrations/<id>/test` | Sends one made-up event through the platform's tag (`{ "event", "test_event_code", "test_mode" }`, all optional; the test settings apply to this event only). |
+| `PUT /admin/api/enrichment` | Saves the enrichment settings (`{ "enabled", "url", "key", "header_name", "header_value", "event_user_data" }`). |
 | `GET /admin/api/tenants` | Tenants and their counters. |
 | `POST /admin/api/tenants` | Creates a tenant (JSON body as above). |
 | `PUT /admin/api/tenants/<id>` | Replaces a tenant's settings. |
@@ -268,7 +272,7 @@ The admin routes work on any host and don't need `PROXY_SECRET`, because the edg
 
 ## Containers
 
-A container file lists templates, clients and tags. Template paths are relative to the file. The built-in `ga4_client`, `ga4_tag` and `google_scripts_client` are always available.
+A container file lists templates, clients and tags. Template paths are relative to the file. The built-in templates are always available: `ga4_client`, `ga4_tag`, `google_scripts_client`, the ad platform tags (`meta_capi`, `tiktok_events`, `pinterest_capi`, `google_ads`, `snapchat_capi`, `reddit_capi`, `linkedin_capi`, `x_capi`), `bigquery_export` and `shopify_client`.
 
 ```json
 {
@@ -391,7 +395,7 @@ It needs a conversion action in the account, an OAuth client and a refresh token
 
 Consent Mode v2: a tag sends only when the hit grants both `ad_storage` and `ad_user_data`. The server reads them from the hit's `gcd` parameter and falls back to `gcs` for ad storage. A denied signal always skips the event. So does a signal the hit doesn't carry (for example a hit with `gcs` but no `gcd`, from an older tag setup), unless the platform's "Send when the hit has no consent signals" switch is on, which is meant for sites without Consent Mode.
 
-A skipped event is reported as `skipped`, not as a success, with its reason in the request's log line, for example `tag[Meta Conversions API]=skipped(consent:ad_user_data=denied)`. Reasons are `unmapped_event`, `consent:<signal>=denied` and `consent:<signal>=missing`. `/system` and the admin counters count skipped tags apart from successes and failures.
+A skipped event is reported as `skipped`, not as a success, with its reason in the request's log line, for example `tag[Meta Conversions API]=skipped(consent:ad_user_data=denied)`. Reasons are `unmapped_event`, `consent:<signal>=denied` and `consent:<signal>=missing`; LinkedIn and X also skip with `no_user_id`, the BigQuery export with `event_not_selected`, and the GA4 tag an event that isn't a GA4 hit (a Shopify order) with `not_a_ga4_hit`. A skipped run is not a failure: it has its own count in the console, the setup check and the alerts. `/system` and the admin counters count skipped tags apart from successes and failures.
 
 Snapchat, Reddit, LinkedIn and X have their own [setup guide](docs/ad-platforms.md). The tags are tested against stand-ins for the platforms, not against real accounts, so use each platform's test mode first where it has one (LinkedIn and X don't).
 
@@ -414,7 +418,7 @@ With an enrichment endpoint set, each tag calls it for every conversion: `GET <u
   "city": "Berlin", "state": "be", "zip": "10115", "country": "de", "external_id": "cust-7" }
 ```
 
-Every field is optional and may be plain or already a SHA-256 hex digest. Plain values are normalised (trimmed and lower-cased, phone numbers reduced to digits) and hashed before they leave the server, and each platform gets the fields it accepts (TikTok: email, phone, external id). Answers are kept for five minutes per visitor, so a busy visitor doesn't hit your server on every event; two tags running for the same first event may each ask once. A slow (2 s limit) or failing endpoint never stops a conversion: it is sent without the extra fields. The endpoint must be `https://`, and addresses inside your own network are refused like any other outgoing send.
+Every field is optional and may be plain or already a SHA-256 hex digest. Plain values are normalised (trimmed and lower-cased, phone numbers reduced to digits) and hashed before they leave the server, and each platform gets the fields it accepts (TikTok: email, phone, external id). Answers are kept for five minutes per visitor, so a busy visitor doesn't hit your server on every event; two tags running for the same event share one lookup. A slow (2 s limit) or failing endpoint never stops a conversion: it is sent without the extra fields. The endpoint must be `https://`, and addresses inside your own network are refused like any other outgoing send.
 
 **User data sent with the event.** Turn on "Use user data sent with the event" (`event_user_data` in the enrichment settings) and the tags also use the user-provided data the page sends with GA4 events, with or without an endpoint. The GA4 client puts it in event data as Google's sGTM does, under `user_data`: `email_address`, `phone_number`, `address.first_name`, `last_name`, `street`, `city`, `region`, `postal_code`, `country`, and `sha256_email_address`, `sha256_phone_number`, `address.sha256_first_name`, `address.sha256_last_name`. It reads `ep.user_data.*` parameters (`email` and `phone` count as `email_address` and `phone_number`) and the Google tag's `em` envelope (`tv.1~em.<hash>~ph.<hash>…`), whose base64 digests become hex. Plain values are normalised and hashed like the endpoint's, digests are sent as they are, and where the endpoint answers a field too, its answer wins. A container file's own `meta_capi`, `tiktok_events` or `pinterest_capi` tag turns it on with `"eventUserData": true` in its `data`. Events the server makes itself, such as the Shopify order webhook's (marked with `x-sst-source`), carry the buyer's own details: the tags use those without the switch, and they win over the endpoint's answer.
 

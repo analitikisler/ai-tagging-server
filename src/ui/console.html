@@ -308,14 +308,9 @@
   .section-label { color: var(--color-muted); font: var(--font-weight-medium) var(--c-text-xs) / 1.3 var(--font-mono); }
   .meta { color: var(--color-muted); font: var(--c-text-xs) / 1.5 var(--font-mono); font-variant-numeric: tabular-nums; }
   .note { max-width: var(--text-measure); color: var(--color-muted); font-size: var(--c-text-sm); line-height: var(--text-leading-lead); }
-  .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .path { font-family: var(--font-mono); font-size: var(--c-text-sm); color: var(--color-text-strong); overflow-wrap: anywhere; }
 
   /* --- Icon --- */
   .icon { display: inline-block; width: 1em; height: 1em; vertical-align: -0.125em; flex: none; }
-  .icon[data-size="12"] { width: 12px; height: 12px; }
-  .icon[data-size="14"] { width: 14px; height: 14px; }
-  .icon[data-size="16"] { width: 16px; height: 16px; }
   .icon[data-rotate="90"] { transform: rotate(90deg); }
   .icon[data-rotate="180"] { transform: rotate(180deg); }
   .icon[data-rotate="270"] { transform: rotate(270deg); }
@@ -452,12 +447,8 @@
   .table :is(th, td)[data-num] { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .table td[data-mono] { font-family: var(--font-mono); overflow-wrap: anywhere; }
   .table td[data-fit], .table th[data-fit] { width: 1%; white-space: nowrap; }
-  .table tbody tr[data-href] { cursor: pointer; }
-  .table tbody tr:is([data-href], [aria-selected]):hover { background: var(--color-surface-2); }
-  .table tbody tr[aria-selected="true"] { background: var(--color-accent-soft); }
   .table tbody tr:focus-visible { outline-offset: -2px; }
   .table caption { padding: 0 0 var(--space-2); color: var(--color-muted); font-size: var(--c-text-xs); text-align: left; }
-  .table[data-wide] table { min-width: 40rem; }
 
   /* --- Hit list (debugger left pane) --- */
   .hit-list > li + li { border-top: var(--border-width-hair) solid var(--color-border); }
@@ -472,7 +463,6 @@
   .hit__time { color: var(--color-muted); font: var(--c-text-xs) / 1.3 var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
   .hit__events { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
   .hit__result { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 2px var(--space-3); }
-  .hit-list__more { display: flex; justify-content: center; padding: var(--space-3); }
 
   /* --- Code block: JSON, headers, logs --- */
   .codeblock { position: relative; min-width: 0; overflow: hidden; background: var(--color-code-bg); border: var(--border-width-hair) solid var(--color-border); border-radius: var(--radius-lg); }
@@ -484,7 +474,6 @@
   .codeblock pre[data-wrap] { white-space: pre-wrap; overflow-wrap: anywhere; }
   .codeblock pre:focus-visible { outline-offset: -2px; }
   .codeblock pre code { font-size: inherit; }
-  .codeblock__foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-top: var(--border-width-hair) solid var(--color-border); font-size: var(--c-text-xs); }
   /* The six highlight roles. JSON: key .k, string .s, number/boolean .w, null and redacted .c */
   .codeblock :is(.k, .a) { color: var(--color-code-keyword); }
   .codeblock :is(.s, .g) { color: var(--color-code-string); }
@@ -492,11 +481,7 @@
   .codeblock .y { color: var(--color-warn); }
   .codeblock :is(.r, .o) { color: var(--color-bad); }
   .codeblock .w { color: var(--color-text-strong); }
-  .codeblock .mark { color: var(--color-text-strong); box-shadow: inset 0 calc(-1 * var(--border-width-thick)) 0 var(--color-mark); }
   /* Log lines: one per row, level as a Status */
-  .log { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 var(--space-3); }
-  .log > .status { padding-top: 3px; }
-  .log > code { font-size: var(--c-text-sm); overflow-wrap: anywhere; white-space: pre-wrap; }
 
   /* --- Key-value list --- */
   .kv { display: grid; grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr); font-size: var(--c-text-sm); }
@@ -621,11 +606,9 @@
 @layer utilities {
   .visually-hidden:not(:focus-within, :active) { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; clip-path: inset(50%) !important; white-space: nowrap !important; }
   .mono { font-family: var(--font-mono); font-variation-settings: normal; }
-  .tabular { font-variant-numeric: tabular-nums; }
   .muted { color: var(--color-muted); }
   .strong { color: var(--color-text-strong); }
   .nowrap { white-space: nowrap; }
-  .truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ml-auto { margin-left: auto; }
 }
 
@@ -686,7 +669,6 @@
 
   .detail-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-2) var(--space-3); }
   .detail-head__text { flex: 1 1 14rem; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-  .detail-head__title { color: var(--color-text-strong); font: var(--font-weight-bold) var(--c-text-lg) / 1.3 var(--font-mono); overflow-wrap: anywhere; }
   .steps { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); font: var(--c-text-sm) / 1.4 var(--font-mono); color: var(--color-text); }
   .steps .icon { width: 12px; height: 12px; color: var(--color-muted); }
   .steps b { font-weight: var(--font-weight-medium); }
@@ -718,7 +700,6 @@
   .flag[data-tone="muted"] { color: var(--color-muted); }
   .flag-list { display: flex; flex-direction: column; gap: 4px; }
   .val-null { color: var(--color-muted); }
-  .cell-actions { display: flex; gap: 4px; justify-content: flex-end; }
   .table td .copy-button { white-space: nowrap; }
   .table tr[data-flag="bad"] td:first-child, .table tr[data-flag="warn"] td:first-child { color: var(--color-text-strong); }
 
@@ -733,7 +714,7 @@
   .loglines > li > code { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-code-text); font-size: inherit; }
   .loglines b { color: var(--color-code-keyword); font-weight: var(--font-weight-medium); }
 
-  .kbd, kbd { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border: var(--border-width-hair) solid var(--color-border-strong); border-bottom-width: var(--border-width-thin);
+  kbd { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border: var(--border-width-hair) solid var(--color-border-strong); border-bottom-width: var(--border-width-thin);
     border-radius: var(--radius-sm); color: var(--color-text-strong); font: var(--font-weight-medium) var(--c-text-xs) / 1 var(--font-mono); }
 
   /* Dialog: confirm, shortcuts */
@@ -766,7 +747,6 @@
   .metric__sub { color: var(--color-text); font: var(--c-text-xs) / 1.4 var(--font-mono); font-variant-numeric: tabular-nums; }
   .metric__formula { color: var(--color-muted); font: var(--c-text-xs) / 1.4 var(--font-mono); }
   .metric .status { margin-top: 2px; }
-  .metric__head { display: flex; justify-content: space-between; gap: var(--space-2); align-items: baseline; }
 
   .err-row { display: grid; grid-template-columns: minmax(8.5rem, max-content) minmax(0, 1fr) auto; gap: 4px var(--space-3); align-items: baseline; }
   .err-row__msg { min-width: 0; overflow-wrap: anywhere; color: var(--color-text-strong); }
@@ -795,7 +775,6 @@
 @layer utilities {
   .mt-2 { margin-top: var(--space-2); }
   .gap-1 { gap: var(--space-1); }
-  .wrap-any { overflow-wrap: anywhere; }
 }
 @layer layout { .pane__head > .input-group { flex: 1 1 100%; } .pane__head > .filters { flex: 1 1 100%; } }
 /* Layer order: components override layout, so the shell's hide rules for buttons live here. */
@@ -981,7 +960,7 @@ const STRINGS = {
     'ck.tag_failing': '{tag} failed {failed} of {runs} times ({pct}%).',
     'ck.tag_ok': '{tag} ran {runs} times without problems.',
     'ck.tag_idle': '{tag} didn’t run once in the last 24 hours, though hits arrived. Check its trigger, or the events the site sends.',
-    'ck.no_ad_platforms': 'No ad platform tags yet: Meta, TikTok, Pinterest or Google Ads.',
+    'ck.no_ad_platforms': 'No ad platform tags yet: Meta, TikTok, Pinterest, Google Ads, Snapchat, Reddit, LinkedIn or X.',
     'ck.conversion_missing': '{tag} waits for {event} events, and none arrived in the last 24 hours. Send {event} from the site (or test one with the live check below).',
     'ck.value_missing': '{key} is missing on {pct}% of {event} events. Add it to the {event} event in the web container.',
     'ck.event_id_missing': '{tag}: {pct}% of {event} events have no event_id.',
@@ -1025,15 +1004,12 @@ const STRINGS = {
     'nav.history': 'History',
     'chk.title': 'Check before saving',
     'chk.summary': 'Replayed against {hits} recent hits: this change affects {changed}.',
-    'chk.none': 'Replayed against {hits} recent hits: nothing they send changes.',
-    'chk.noHits': 'No recent hits to check it against yet.',
     'chk.replayError': 'The check couldn’t run: {message}',
     'chk.pinned': 'Pinned test hits affected: {names}',
     'chk.hits': '{n} hits, e.g. {example}',
     'chk.hit': '1 hit: {example}',
     'chk.aiTitle': 'AI review',
     'chk.save': 'Save anyway',
-    'chk.saveOk': 'Save',
     'chk.reviewing': 'The AI is reviewing the change…',
     'chk.verdict.fine': 'looks intended',
     'chk.verdict.check': 'worth a second look',
@@ -1133,8 +1109,8 @@ const STRINGS = {
     'tf.down': 'Move down',
     'tf.delete': 'Delete',
     'tf.delete.title': 'Delete {name}?',
-    'tf.delete.body': 'Tags get the event without this change from the next hit on.',
-    'tf.saved': 'Transformations saved. Every instance applies them within a few seconds.',
+    'tf.delete.body': 'Once the draft is published, tags get the event without this change.',
+    'tf.saved': 'Transformations saved to the draft. They apply once it is published.',
     'tf.conflict': 'The container changed since it was loaded. It has been reloaded; make the change again.',
     'tf.editor.title': 'Edit the transformation',
     'tf.editor.new': 'New transformation',
@@ -1246,7 +1222,7 @@ const STRINGS = {
     'ft.origin.enforce': 'Enforced',
     'ft.origin.log': 'Logging only',
     'ft.platforms.name': 'Server-side ad platforms',
-    'ft.platforms.line': 'Meta, TikTok, Pinterest and Google Ads conversions, sent from your server.',
+    'ft.platforms.line': 'Meta, TikTok, Pinterest, Google Ads, Snapchat, Reddit, LinkedIn and X conversions, sent from your server.',
     'ft.platforms.how': 'Add a platform’s tag on the Tags page, or describe your setup on Set up with AI and review what it proposes.',
     'ft.transform.name': 'Transformations',
     'ft.transform.line': 'Rename, fix and clean event data per tag, without touching the website.',
@@ -1341,10 +1317,8 @@ const STRINGS = {
     'nav.live': 'Live',
     'nav.errors': 'Errors',
     'nav.tags': 'Tags and triggers',
-    'nav.clients': 'Clients',
     'nav.sites': 'Sites',
     'nav.integrations': 'Integrations',
-    'nav.settings': 'Settings',
     'nav.menu': 'Open menu',
     'nav.close': 'Close menu',
     'nav.site': 'Site',
@@ -1372,21 +1346,9 @@ const STRINGS = {
 
     'kpi.requests': 'Hits',
     'kpi.requests.help': 'Every request the server answered, health checks excluded.',
-    'kpi.events': 'Events',
-    'kpi.events.help': 'Events the clients built from those hits. One hit can carry several.',
-    'kpi.tagsFired': 'Tags fired',
-    'kpi.tagsFired.help': 'Tag runs that reported success.',
-    'kpi.tagsFailed': 'Tags failed',
-    'kpi.tagsFailed.help': 'Tag runs that reported failure or threw an exception.',
-    'kpi.tagsTimeout': 'Tags timed out',
     'kpi.tagsTimeout.help': 'Tag runs still unfinished when the time budget ran out.',
-    'kpi.sendsOk': 'Sends delivered',
-    'kpi.sendsOk.help': 'Outgoing requests the vendor answered with 2xx or 3xx.',
-    'kpi.sendsFailed': 'Sends failed',
-    'kpi.sendsFailed.help': 'Outgoing requests the vendor refused or that never reached it.',
     'kpi.retries': 'Send retries',
     'kpi.retries.help': 'Extra attempts after a failed connection or a 502, 503 or 504 answer.',
-    'kpi.unclaimed': 'Unclaimed hits',
     'kpi.unclaimed.help': 'Hits no client claimed, so no event was built.',
     'kpi.clientErrors': 'Client errors',
     'kpi.clientErrors.help': 'Hits where the claiming client threw before building its events.',
@@ -1396,43 +1358,22 @@ const STRINGS = {
     'kpi.busy.help': 'Hits turned away because every worker was in use.',
     'kpi.inFlight': 'In progress',
     'kpi.inFlight.help': 'Hits being handled right now.',
-    'kpi.status2xx': '2xx',
     'kpi.status2xx.help': 'Hits answered with success.',
-    'kpi.status3xx': '3xx',
     'kpi.status3xx.help': 'Hits answered with a redirect.',
-    'kpi.status4xx': '4xx',
     'kpi.status4xx.help': 'Hits refused, for example a wrong measurement ID or origin.',
-    'kpi.status5xx': '5xx',
     'kpi.status5xx.help': 'Hits the server could not handle.',
     'kpi.latency': 'Response time',
     'kpi.latency.help': 'Approximate, from a histogram: p50 is the typical hit, p99 the slowest 1 in 100.',
-    'kpi.p50': 'p50',
-    'kpi.p95': 'p95',
-    'kpi.p99': 'p99',
-    'kpi.share': '{pct} of {total}',
-    'kpi.none': 'None yet',
 
     // Live debugger: list
     'live.title': 'Live',
-    'live.lead': 'The last hits on this instance, newest first. Open one to see its tags, triggers and sends.',
     'live.list': 'Hits',
     'live.col.time': 'Time',
-    'live.col.site': 'Site',
-    'live.col.method': 'Method',
-    'live.col.path': 'Path',
-    'live.col.status': 'Status',
-    'live.col.duration': 'Time taken',
-    'live.col.client': 'Client',
-    'live.col.events': 'Events',
-    'live.col.tags': 'Tags',
-    'live.col.sends': 'Sends',
     'live.unclaimed': 'Unclaimed',
-    'live.tagsSummary': '{ok} fired · {bad} failed',
     'live.sendsSummary': '{ok} delivered · {bad} failed',
     'live.eventsMore': '+{n} more',
     'live.pause': 'Pause',
     'live.resume': 'Resume',
-    'live.paused': 'Paused. New hits wait until resumed.',
     'live.newHits': 'Show {n} new hits',
     'live.newHits.one': 'Show 1 new hit',
     'live.clear': 'Clear hits',
@@ -1443,7 +1384,6 @@ const STRINGS = {
     'live.search': 'Search path, event, tag or client',
     'live.search.label': 'Search hits',
     'live.filter.label': 'Show',
-    'live.filter.all': 'All hits',
     'live.filter.errors': 'With errors',
     'live.filter.unclaimed': 'Unclaimed',
     'live.filter.notFired': 'With tags not fired',
@@ -1451,7 +1391,6 @@ const STRINGS = {
     'live.filter.anyEvent': 'Any event',
     'live.filter.reset': 'Clear filters',
     'live.count': '{shown} of {total} hits',
-    'live.capacity': 'Keeps the last {n} hits on this instance.',
     'live.noMatch.title': 'No hits match',
     'live.noMatch.body': 'Nothing in the last {n} hits matches these filters.',
     'live.empty.title': 'No hits yet',
@@ -1463,8 +1402,6 @@ const STRINGS = {
     'live.off.body': 'TRACE_BUFFER is 0 on this server, so no hits are kept for Live. Set it to 200 or more and restart.',
     'live.select': 'Pick a hit on the left to see its detail.',
     'live.back': 'Back to hits',
-    'live.prev': 'Previous hit',
-    'live.next': 'Next hit',
     'live.gone': 'This hit is no longer kept. Newer hits pushed it out of memory.',
 
     // Live debugger: detail tabs
@@ -1477,13 +1414,10 @@ const STRINGS = {
     'tab.console': 'Console',
 
     // Summary
-    'summary.title': '{method} {path}',
     'summary.answered': 'Answered {status} in {ms} ms',
-    'summary.at': 'Received {time}',
     'summary.site': 'Site',
     'summary.claimedBy': 'Claimed by',
     'summary.unclaimed': 'No client claimed this hit, so no event was built.',
-    'summary.clientError': 'The client failed: {message}',
     'summary.events': 'Events',
     'summary.eventsCount': '{n} events',
     'summary.eventsCount.one': '1 event',
@@ -1492,13 +1426,8 @@ const STRINGS = {
     'summary.allGood': 'Every tag that should fire fired, and every send was delivered.',
     'summary.problems': '{n} problems in this hit',
     'summary.problems.one': '1 problem in this hit',
-    'summary.copyId': 'Copy hit ID',
 
     // Tags tab
-    'tags.col.tag': 'Tag',
-    'tags.col.event': 'Event',
-    'tags.col.outcome': 'Result',
-    'tags.col.error': 'Error',
     'tags.fired': 'Fired',
     'tags.notFired': 'Not fired',
     'tags.failed': 'Failed',
@@ -1506,7 +1435,6 @@ const STRINGS = {
     'tags.exception': 'Exception',
     'tags.firedHelp': 'The tag ran and called gtmOnSuccess.',
     'tags.failedHelp': 'The tag ran and called gtmOnFailure, or ended without calling either.',
-    'tags.timedOutHelp': 'The tag was still running when the time budget of {ms} ms ran out.',
     'tags.exceptionHelp': 'The tag’s code threw an error.',
     'tags.notFiredHelp': 'A trigger condition did not match. See Triggers.',
     'tags.none': 'No tag fired for this hit.',
@@ -1526,7 +1454,6 @@ const STRINGS = {
     'triggers.always': 'No conditions: fires for every event.',
     'triggers.missing': '(not set)',
     'triggers.empty': '(empty)',
-    'triggers.showMatched': 'Show tags that fired',
     'triggers.onlyNotFired': 'Only tags that did not fire',
     'triggers.none': 'No events, so no triggers were checked.',
 
@@ -1551,7 +1478,6 @@ const STRINGS = {
 
     // Variables tab (event data)
     'vars.lead': 'The event data each tag saw, by event.',
-    'vars.event': 'Event {n}: {name}',
     'vars.col.key': 'Key',
     'vars.col.value': 'Value',
     'vars.col.type': 'Type',
@@ -1567,7 +1493,6 @@ const STRINGS = {
     'req.body': 'Body',
     'req.remote': 'Remote address',
     'req.response': 'Response',
-    'req.responseStatus': 'Status',
     'req.responseHeaders': 'Response headers',
     'req.redacted': 'Hidden. Only the header name is kept.',
     'req.bodyCut': 'Showing the first 16 KB.',
@@ -1577,39 +1502,21 @@ const STRINGS = {
 
     // Outgoing tab
     'out.lead': 'Every request the tags and clients sent, in order.',
-    'out.col.from': 'From',
-    'out.col.method': 'Method',
-    'out.col.url': 'URL',
-    'out.col.result': 'Result',
     'out.col.detail': 'Detail',
     'out.delivered': 'Delivered ({status})',
     'out.refused': 'Refused by vendor ({status})',
     'out.networkError': 'Network error',
     'out.blocked': 'Blocked: private or internal address',
-    'out.retried': 'Retried {n} times',
-    'out.retried.one': 'Retried once',
-    'out.showDetail': 'Show request and answer',
-    'out.hideDetail': 'Hide request and answer',
     'out.none': 'Nothing was sent for this hit.',
 
     // Console tab
     'console.lead': 'What the templates logged with logToConsole, in order.',
-    'console.col.from': 'From',
-    'console.col.message': 'Message',
     'console.none': 'The templates logged nothing for this hit.',
 
     // Errors inbox
     'errors.title': 'Errors',
     'errors.lead': 'Hits with a broken tag, client or send, from the last hits on this instance.',
-    'errors.col.time': 'Time',
-    'errors.col.severity': 'Severity',
-    'errors.col.site': 'Site',
-    'errors.col.what': 'What broke',
-    'errors.col.where': 'Tag or client',
-    'errors.col.message': 'Message',
     'errors.col.count': 'Hits',
-    'errors.group': 'Group by message',
-    'errors.ungroup': 'Show each hit',
     'errors.what.tagFailure': 'Tag failed',
     'errors.what.tagTimeout': 'Tag timed out',
     'errors.what.tagException': 'Tag exception',
@@ -1617,7 +1524,6 @@ const STRINGS = {
     'errors.what.sendFailed': 'Send failed',
     'errors.what.status5xx': 'Server error',
     'errors.what.unclaimed': 'Unclaimed hit',
-    'errors.openHit': 'Open hit',
     'errors.empty.title': 'No errors',
     'errors.empty': 'No errors in the last {n} hits.',
     'errors.noHits': 'No hits yet, so nothing to check. Send a test hit from Live.',
@@ -1630,12 +1536,10 @@ const STRINGS = {
     'container.title': 'Tags and triggers',
     'container.lead': 'The tags this server runs and the conditions that fire them.',
     'container.version': 'Container version {version}',
-    'container.builtin': 'Built-in container',
     'container.col.name': 'Name',
     'container.col.template': 'Template',
     'container.col.trigger': 'Fires when',
     'container.col.data': 'Settings',
-    'container.col.firedLast': 'Fired in last hits',
     'container.everyEvent': 'Every event',
     'container.and': 'and',
     'container.secret': 'hidden',
@@ -1645,8 +1549,6 @@ const STRINGS = {
     'container.templateCustom': 'Custom',
     'container.permissions': 'Permissions',
     'container.noTags': 'This container has no tags, so events are built but nothing is sent.',
-    'container.showData': 'Show settings',
-    'container.hideData': 'Hide settings',
 
     // Clients
     'clients.title': 'Clients',
@@ -1672,7 +1574,6 @@ const STRINGS = {
     'sites.originBadge': 'Origin check: {mode}',
     'sites.empty.title': 'No sites yet',
     'sites.empty.body': 'Add a site with its host and GA4 measurement ID. Hits for hosts no site owns get 404.',
-    'sites.notAvailable': 'Sites need TENANTS_FILE on this server. This server runs one site from its environment.',
 
     'sites.stat.requests': 'Hits',
     'sites.stat.events': 'Events',
@@ -1791,21 +1692,6 @@ const STRINGS = {
     'enr.saved': 'Enrichment saved',
 
     // Settings
-    'settings.title': 'Settings',
-    'settings.theme': 'Theme',
-    'settings.theme.system': 'Same as the system',
-    'settings.theme.dark': 'Dark',
-    'settings.theme.light': 'Light',
-    'settings.language': 'Language',
-    'settings.refresh': 'Check for new hits',
-    'settings.refresh.2': 'Every 2 seconds',
-    'settings.refresh.5': 'Every 5 seconds',
-    'settings.refresh.off': 'Only when refreshed',
-    'settings.time': 'Times',
-    'settings.time.relative': 'Relative (12 s ago)',
-    'settings.time.clock': 'Clock (14:02:31)',
-    'settings.session': 'Session',
-    'settings.session.help': 'The admin token is kept in this tab only and cleared when it closes.',
     'settings.privacy': 'Hits are kept in memory only, never on disk. Cookie, authorization, x-debug-token and x-proxy-secret headers are hidden; query and body are kept for admins.',
 
     // Theme and language toggles (show what a click switches to)
@@ -1817,10 +1703,7 @@ const STRINGS = {
     'lang.switch.label': 'Türkçe’ye geç',
 
     // Toasts and shared actions
-    'toast.saved': 'Saved',
-    'toast.deleted': 'Deleted',
     'toast.copied': 'Copied',
-    'toast.cleared': 'Cleared',
     'toast.failed': 'Not saved: {message}',
     'toast.dismiss': 'Dismiss',
     'action.copy': 'Copy',
@@ -1828,16 +1711,12 @@ const STRINGS = {
     'action.cancel': 'Cancel',
     'action.close': 'Close',
     'action.retry': 'Try again',
-    'action.refresh': 'Refresh',
-    'action.expand': 'Show all',
-    'action.collapse': 'Show less',
     'action.copyValue': 'Copy value',
 
     // Errors from the API
     'err.network': 'The server did not answer. Check the connection and refresh.',
     'err.http': 'The server answered {status}: {message}',
     'err.notFound': 'Not found. It may have been deleted in another tab.',
-    'err.conflict': 'Someone saved a newer version. Refresh to see it, then edit again.',
     'err.generic': 'Something did not work: {message}',
     'err.loading': 'Loading…',
 
@@ -1853,6 +1732,7 @@ const STRINGS = {
     'keys.errors': 'Go to Errors',
     'keys.live': 'Go to Live',
     'keys.overview': 'Go to Overview',
+    'keys.tags': 'Go to Tags and triggers',
     'keys.theme': 'Switch theme',
     'keys.help': 'Show these shortcuts',
     'keys.close': 'Close a panel or dialog',
@@ -1864,7 +1744,6 @@ const STRINGS = {
     'time.min': '{n} min ago',
     'time.h': '{n} h ago',
     'time.d': '{n} d ago',
-    'time.ms': '{n} ms',
     'time.uptime': '{d} d {h} h',
     'time.uptimeShort': '{h} h {m} min',
     'time.uptimeMin': '{m} min'
@@ -1968,7 +1847,7 @@ const STRINGS = {
     'ck.tag_failing': '{tag}, {runs} çalışmadan {failed} tanesinde başarısız oldu (%{pct}).',
     'ck.tag_ok': '{tag} sorunsuz {runs} kez çalıştı.',
     'ck.tag_idle': '{tag} son 24 saatte hit gelmesine rağmen hiç çalışmadı. Trigger’ını ya da sitenin gönderdiği event’leri kontrol edin.',
-    'ck.no_ad_platforms': 'Henüz reklam platformu tag’i yok: Meta, TikTok, Pinterest ya da Google Ads.',
+    'ck.no_ad_platforms': 'Henüz reklam platformu tag’i yok: Meta, TikTok, Pinterest, Google Ads, Snapchat, Reddit, LinkedIn ya da X.',
     'ck.conversion_missing': '{tag}, {event} event’lerini bekliyor ve son 24 saatte hiç gelmedi. Siteden {event} gönderin (ya da aşağıdaki canlı kontrolle birini deneyin).',
     'ck.value_missing': '{event} event’lerinin %{pct} kadarında {key} yok. Web container’ındaki {event} event’ine ekleyin.',
     'ck.event_id_missing': '{tag}: {event} event’lerinin %{pct} kadarında event_id yok.',
@@ -2012,15 +1891,12 @@ const STRINGS = {
     'nav.history': 'Geçmiş',
     'chk.title': 'Kaydetmeden önce kontrol',
     'chk.summary': 'Son {hits} hit ile yeniden çalıştırıldı: bu değişiklik {changed} tanesini etkiliyor.',
-    'chk.none': 'Son {hits} hit ile yeniden çalıştırıldı: gönderdiklerinde hiçbir şey değişmiyor.',
-    'chk.noHits': 'Kontrol edilecek yeni hit henüz yok.',
     'chk.replayError': 'Kontrol çalışmadı: {message}',
     'chk.pinned': 'Etkilenen sabitlenmiş test hit’leri: {names}',
     'chk.hits': '{n} hit, örn. {example}',
     'chk.hit': '1 hit: {example}',
     'chk.aiTitle': 'AI incelemesi',
     'chk.save': 'Yine de kaydet',
-    'chk.saveOk': 'Kaydet',
     'chk.reviewing': 'AI değişikliği inceliyor…',
     'chk.verdict.fine': 'amaçlanmış görünüyor',
     'chk.verdict.check': 'bir daha bakmaya değer',
@@ -2120,8 +1996,8 @@ const STRINGS = {
     'tf.down': 'Aşağı taşı',
     'tf.delete': 'Sil',
     'tf.delete.title': '{name} silinsin mi?',
-    'tf.delete.body': 'Sonraki hit’ten itibaren tag’ler event’i bu değişiklik olmadan alır.',
-    'tf.saved': 'Dönüşümler kaydedildi. Her instance birkaç saniye içinde uygular.',
+    'tf.delete.body': 'Taslak yayınlanınca tag’ler event’i bu değişiklik olmadan alır.',
+    'tf.saved': 'Dönüşümler taslağa kaydedildi. Taslak yayınlanınca uygulanır.',
     'tf.conflict': 'Container yüklendiğinden beri değişti. Yeniden yüklendi; değişikliği tekrar yapın.',
     'tf.editor.title': 'Dönüşümü düzenle',
     'tf.editor.new': 'Yeni dönüşüm',
@@ -2233,7 +2109,7 @@ const STRINGS = {
     'ft.origin.enforce': 'Zorlanıyor',
     'ft.origin.log': 'Yalnızca kayıt',
     'ft.platforms.name': 'Sunucu taraflı reklam platformları',
-    'ft.platforms.line': 'Meta, TikTok, Pinterest ve Google Ads dönüşümleri, sunucunuzdan gönderilir.',
+    'ft.platforms.line': 'Meta, TikTok, Pinterest, Google Ads, Snapchat, Reddit, LinkedIn ve X dönüşümleri, sunucunuzdan gönderilir.',
     'ft.platforms.how': 'Bir platformun tag’ini Tag’ler sayfasından ekleyin ya da kurulumunuzu AI ile kurulum’da anlatıp önerdiğini inceleyin.',
     'ft.transform.name': 'Dönüşümler',
     'ft.transform.line': 'Event verisini tag bazında yeniden adlandırın, düzeltin ve temizleyin; siteye dokunmadan.',
@@ -2328,10 +2204,8 @@ const STRINGS = {
     'nav.live': 'Canlı',
     'nav.errors': 'Hatalar',
     'nav.tags': 'Tag’ler ve trigger’lar',
-    'nav.clients': 'Client’lar',
     'nav.sites': 'Siteler',
     'nav.integrations': 'Entegrasyonlar',
-    'nav.settings': 'Ayarlar',
     'nav.menu': 'Menüyü aç',
     'nav.close': 'Menüyü kapat',
     'nav.site': 'Site',
@@ -2359,21 +2233,9 @@ const STRINGS = {
 
     'kpi.requests': 'Hit',
     'kpi.requests.help': 'Sunucunun yanıtladığı tüm istekler; sağlık kontrolleri hariç.',
-    'kpi.events': 'Event',
-    'kpi.events.help': 'Client’ların bu hit’lerden oluşturduğu event’ler. Bir hit birden çok event taşıyabilir.',
-    'kpi.tagsFired': 'Tetiklenen tag',
-    'kpi.tagsFired.help': 'Başarıyla tamamlanan tag çalışmaları.',
-    'kpi.tagsFailed': 'Başarısız tag',
-    'kpi.tagsFailed.help': 'Başarısız biten ya da kod hatası veren tag çalışmaları.',
-    'kpi.tagsTimeout': 'Zaman aşımına uğrayan tag',
     'kpi.tagsTimeout.help': 'Süre dolduğunda hâlâ bitmemiş tag çalışmaları.',
-    'kpi.sendsOk': 'Teslim edilen gönderim',
-    'kpi.sendsOk.help': 'Sağlayıcının 2xx ya da 3xx ile yanıtladığı giden istekler.',
-    'kpi.sendsFailed': 'Başarısız gönderim',
-    'kpi.sendsFailed.help': 'Sağlayıcının reddettiği ya da hiç ulaşamayan giden istekler.',
     'kpi.retries': 'Yeniden deneme',
     'kpi.retries.help': 'Kopan bağlantı ya da 502, 503, 504 yanıtı sonrası yapılan ek denemeler.',
-    'kpi.unclaimed': 'Sahipsiz hit',
     'kpi.unclaimed.help': 'Hiçbir client’ın üstlenmediği, bu yüzden event oluşmayan hit’ler.',
     'kpi.clientErrors': 'Client hatası',
     'kpi.clientErrors.help': 'Hit’i üstlenen client’ın event oluşturamadan hata verdiği durumlar.',
@@ -2383,43 +2245,22 @@ const STRINGS = {
     'kpi.busy.help': 'Tüm worker’lar meşgulken geri çevrilen hit’ler.',
     'kpi.inFlight': 'İşlenen',
     'kpi.inFlight.help': 'Şu anda işlenmekte olan hit’ler.',
-    'kpi.status2xx': '2xx',
     'kpi.status2xx.help': 'Başarı yanıtı alan hit’ler.',
-    'kpi.status3xx': '3xx',
     'kpi.status3xx.help': 'Yönlendirme yanıtı alan hit’ler.',
-    'kpi.status4xx': '4xx',
     'kpi.status4xx.help': 'Reddedilen hit’ler; örneğin yanlış measurement ID ya da origin.',
-    'kpi.status5xx': '5xx',
     'kpi.status5xx.help': 'Sunucunun işleyemediği hit’ler.',
     'kpi.latency': 'Yanıt süresi',
     'kpi.latency.help': 'Histogramdan yaklaşık değer: p50 tipik hit, p99 her 100 hit’in en yavaşı.',
-    'kpi.p50': 'p50',
-    'kpi.p95': 'p95',
-    'kpi.p99': 'p99',
-    'kpi.share': 'Toplam {total} içinde {pct}',
-    'kpi.none': 'Henüz yok',
 
     // Canlı: liste
     'live.title': 'Canlı',
-    'live.lead': 'Bu instance’taki son hit’ler, en yenisi üstte. Tag, trigger ve gönderimleri görmek için bir hit açılır.',
     'live.list': 'Hit’ler',
     'live.col.time': 'Zaman',
-    'live.col.site': 'Site',
-    'live.col.method': 'Metot',
-    'live.col.path': 'Yol',
-    'live.col.status': 'Durum',
-    'live.col.duration': 'Süre',
-    'live.col.client': 'Client',
-    'live.col.events': 'Event’ler',
-    'live.col.tags': 'Tag’ler',
-    'live.col.sends': 'Gönderimler',
     'live.unclaimed': 'Sahipsiz',
-    'live.tagsSummary': '{ok} tetiklendi · {bad} başarısız',
     'live.sendsSummary': '{ok} teslim · {bad} başarısız',
     'live.eventsMore': '+{n} daha',
     'live.pause': 'Duraklat',
     'live.resume': 'Sürdür',
-    'live.paused': 'Duraklatıldı. Yeni hit’ler sürdürülene kadar bekler.',
     'live.newHits': '{n} yeni hit’i göster',
     'live.clear': 'Hit’leri temizle',
     'live.clear.confirmTitle': 'Bu instance’taki hit’ler temizlensin mi?',
@@ -2429,7 +2270,6 @@ const STRINGS = {
     'live.search': 'Yol, event, tag ya da client ara',
     'live.search.label': 'Hit ara',
     'live.filter.label': 'Göster',
-    'live.filter.all': 'Tüm hit’ler',
     'live.filter.errors': 'Hatalı olanlar',
     'live.filter.unclaimed': 'Sahipsiz olanlar',
     'live.filter.notFired': 'Tetiklenmeyen tag’i olanlar',
@@ -2437,7 +2277,6 @@ const STRINGS = {
     'live.filter.anyEvent': 'Tüm event’ler',
     'live.filter.reset': 'Filtreleri temizle',
     'live.count': '{total} hit içinden {shown}',
-    'live.capacity': 'Bu instance’ta son {n} hit tutulur.',
     'live.noMatch.title': 'Eşleşen hit yok',
     'live.noMatch.body': 'Son {n} hit içinde bu filtrelere uyan yok.',
     'live.empty.title': 'Henüz hit yok',
@@ -2449,8 +2288,6 @@ const STRINGS = {
     'live.off.body': 'Bu sunucuda TRACE_BUFFER 0, bu yüzden Canlı için hit tutulmuyor. 200 ya da üstü bir değerle yeniden başlatılmalı.',
     'live.select': 'Ayrıntı için soldan bir hit seçilir.',
     'live.back': 'Hit’lere dön',
-    'live.prev': 'Önceki hit',
-    'live.next': 'Sonraki hit',
     'live.gone': 'Bu hit artık tutulmuyor; yeni hit’ler onu bellekten çıkardı.',
 
     // Canlı: ayrıntı sekmeleri
@@ -2463,26 +2300,18 @@ const STRINGS = {
     'tab.console': 'Konsol',
 
     // Özet
-    'summary.title': '{method} {path}',
     'summary.answered': 'Yanıt: {status}, {ms} ms',
-    'summary.at': 'Alındı: {time}',
     'summary.site': 'Site',
     'summary.claimedBy': 'Üstlenen client',
     'summary.unclaimed': 'Bu hit’i hiçbir client üstlenmedi, bu yüzden event oluşmadı.',
-    'summary.clientError': 'Client hata verdi: {message}',
     'summary.events': 'Event’ler',
     'summary.eventsCount': '{n} event',
     'summary.tags': '{total} tag içinden {fired} tetiklendi',
     'summary.sends': '{total} gönderimden {ok} teslim edildi',
     'summary.allGood': 'Tetiklenmesi gereken her tag tetiklendi, her gönderim teslim edildi.',
     'summary.problems': 'Bu hit’te {n} sorun var',
-    'summary.copyId': 'Hit ID’sini kopyala',
 
     // Tag’ler sekmesi
-    'tags.col.tag': 'Tag',
-    'tags.col.event': 'Event',
-    'tags.col.outcome': 'Sonuç',
-    'tags.col.error': 'Hata',
     'tags.fired': 'Tetiklendi',
     'tags.notFired': 'Tetiklenmedi',
     'tags.failed': 'Başarısız',
@@ -2490,7 +2319,6 @@ const STRINGS = {
     'tags.exception': 'Kod hatası',
     'tags.firedHelp': 'Tag çalıştı ve gtmOnSuccess’i çağırdı.',
     'tags.failedHelp': 'Tag çalıştı ve gtmOnFailure’ı çağırdı ya da ikisini de çağırmadan bitti.',
-    'tags.timedOutHelp': '{ms} ms’lik süre dolduğunda tag hâlâ çalışıyordu.',
     'tags.exceptionHelp': 'Tag’in kodu hata fırlattı.',
     'tags.notFiredHelp': 'Bir trigger koşulu tutmadı. Ayrıntı Trigger’lar sekmesinde.',
     'tags.none': 'Bu hit için hiçbir tag tetiklenmedi.',
@@ -2510,7 +2338,6 @@ const STRINGS = {
     'triggers.always': 'Koşul yok: her event’te tetiklenir.',
     'triggers.missing': '(tanımsız)',
     'triggers.empty': '(boş)',
-    'triggers.showMatched': 'Tetiklenen tag’leri göster',
     'triggers.onlyNotFired': 'Yalnızca tetiklenmeyen tag’ler',
     'triggers.none': 'Event olmadığı için trigger kontrol edilmedi.',
 
@@ -2534,7 +2361,6 @@ const STRINGS = {
 
     // Değişkenler sekmesi (event verisi)
     'vars.lead': 'Her tag’in gördüğü event verisi, event’e göre.',
-    'vars.event': 'Event {n}: {name}',
     'vars.col.key': 'Anahtar',
     'vars.col.value': 'Değer',
     'vars.col.type': 'Tür',
@@ -2550,7 +2376,6 @@ const STRINGS = {
     'req.body': 'Gövde',
     'req.remote': 'Uzak adres',
     'req.response': 'Yanıt',
-    'req.responseStatus': 'Durum',
     'req.responseHeaders': 'Yanıt header’ları',
     'req.redacted': 'Gizlendi. Yalnızca header adı tutulur.',
     'req.bodyCut': 'İlk 16 KB gösteriliyor.',
@@ -2560,38 +2385,21 @@ const STRINGS = {
 
     // Giden sekmesi
     'out.lead': 'Tag’lerin ve client’ların gönderdiği tüm istekler, sırasıyla.',
-    'out.col.from': 'Gönderen',
-    'out.col.method': 'Metot',
-    'out.col.url': 'URL',
-    'out.col.result': 'Sonuç',
     'out.col.detail': 'Ayrıntı',
     'out.delivered': 'Teslim edildi ({status})',
     'out.refused': 'Sağlayıcı reddetti ({status})',
     'out.networkError': 'Ağ hatası',
     'out.blocked': 'Engellendi: özel ya da iç ağ adresi',
-    'out.retried': '{n} kez yeniden denendi',
-    'out.showDetail': 'İsteği ve yanıtı göster',
-    'out.hideDetail': 'İsteği ve yanıtı gizle',
     'out.none': 'Bu hit için hiçbir şey gönderilmedi.',
 
     // Konsol sekmesi
     'console.lead': 'Template’lerin logToConsole ile yazdıkları, sırasıyla.',
-    'console.col.from': 'Kaynak',
-    'console.col.message': 'Mesaj',
     'console.none': 'Template’ler bu hit için hiçbir şey yazmadı.',
 
     // Hatalar
     'errors.title': 'Hatalar',
     'errors.lead': 'Bu instance’taki son hit’ler içinde tag’i, client’ı ya da gönderimi bozuk olanlar.',
-    'errors.col.time': 'Zaman',
-    'errors.col.severity': 'Önem',
-    'errors.col.site': 'Site',
-    'errors.col.what': 'Bozulan',
-    'errors.col.where': 'Tag ya da client',
-    'errors.col.message': 'Mesaj',
     'errors.col.count': 'Hit',
-    'errors.group': 'Mesaja göre grupla',
-    'errors.ungroup': 'Her hit’i ayrı göster',
     'errors.what.tagFailure': 'Tag başarısız',
     'errors.what.tagTimeout': 'Tag zaman aşımı',
     'errors.what.tagException': 'Tag kod hatası',
@@ -2599,7 +2407,6 @@ const STRINGS = {
     'errors.what.sendFailed': 'Gönderim başarısız',
     'errors.what.status5xx': 'Sunucu hatası',
     'errors.what.unclaimed': 'Sahipsiz hit',
-    'errors.openHit': 'Hit’i aç',
     'errors.empty.title': 'Hata yok',
     'errors.empty': 'Son {n} hit içinde hata yok.',
     'errors.noHits': 'Henüz hit yok, kontrol edilecek bir şey de yok. Canlı sayfasından test hit’i gönderilebilir.',
@@ -2612,12 +2419,10 @@ const STRINGS = {
     'container.title': 'Tag’ler ve trigger’lar',
     'container.lead': 'Bu sunucunun çalıştırdığı tag’ler ve onları tetikleyen koşullar.',
     'container.version': 'Container sürümü {version}',
-    'container.builtin': 'Yerleşik container',
     'container.col.name': 'Ad',
     'container.col.template': 'Template',
     'container.col.trigger': 'Tetiklenme koşulu',
     'container.col.data': 'Ayarlar',
-    'container.col.firedLast': 'Son hit’lerde tetiklenme',
     'container.everyEvent': 'Her event',
     'container.and': 've',
     'container.secret': 'gizli',
@@ -2627,8 +2432,6 @@ const STRINGS = {
     'container.templateCustom': 'Özel',
     'container.permissions': 'İzinler',
     'container.noTags': 'Bu container’da tag yok; event’ler oluşur ama hiçbir şey gönderilmez.',
-    'container.showData': 'Ayarları göster',
-    'container.hideData': 'Ayarları gizle',
 
     // Client’lar
     'clients.title': 'Client’lar',
@@ -2654,7 +2457,6 @@ const STRINGS = {
     'sites.originBadge': 'Origin kontrolü: {mode}',
     'sites.empty.title': 'Henüz site yok',
     'sites.empty.body': 'Host ve GA4 measurement ID ile bir site eklenir. Hiçbir siteye ait olmayan host’lara gelen hit’ler 404 alır.',
-    'sites.notAvailable': 'Siteler için bu sunucuda TENANTS_FILE gerekir. Bu sunucu tek bir siteyi ortam değişkenlerinden çalıştırıyor.',
 
     'sites.stat.requests': 'Hit',
     'sites.stat.events': 'Event',
@@ -2773,21 +2575,6 @@ const STRINGS = {
     'enr.saved': 'Zenginleştirme kaydedildi',
 
     // Ayarlar
-    'settings.title': 'Ayarlar',
-    'settings.theme': 'Tema',
-    'settings.theme.system': 'Sistemle aynı',
-    'settings.theme.dark': 'Koyu',
-    'settings.theme.light': 'Açık',
-    'settings.language': 'Dil',
-    'settings.refresh': 'Yeni hit kontrolü',
-    'settings.refresh.2': '2 saniyede bir',
-    'settings.refresh.5': '5 saniyede bir',
-    'settings.refresh.off': 'Yalnızca yenileyince',
-    'settings.time': 'Zaman gösterimi',
-    'settings.time.relative': 'Göreli (12 sn önce)',
-    'settings.time.clock': 'Saat (14:02:31)',
-    'settings.session': 'Oturum',
-    'settings.session.help': 'Admin token’ı yalnızca bu sekmede tutulur, sekme kapanınca silinir.',
     'settings.privacy': 'Hit’ler yalnızca bellekte tutulur, diske yazılmaz. Cookie, authorization, x-debug-token ve x-proxy-secret header’ları gizlenir; query ve gövde yalnızca admin’ler için tutulur.',
 
     // Tema ve dil düğmeleri (tıklanınca geçilecek olanı gösterir)
@@ -2799,10 +2586,7 @@ const STRINGS = {
     'lang.switch.label': 'Switch to English',
 
     // Bildirimler ve ortak eylemler
-    'toast.saved': 'Kaydedildi',
-    'toast.deleted': 'Silindi',
     'toast.copied': 'Kopyalandı',
-    'toast.cleared': 'Temizlendi',
     'toast.failed': 'Kaydedilmedi: {message}',
     'toast.dismiss': 'Kapat',
     'action.copy': 'Kopyala',
@@ -2810,16 +2594,12 @@ const STRINGS = {
     'action.cancel': 'Vazgeç',
     'action.close': 'Kapat',
     'action.retry': 'Yeniden dene',
-    'action.refresh': 'Yenile',
-    'action.expand': 'Tümünü göster',
-    'action.collapse': 'Daha az göster',
     'action.copyValue': 'Değeri kopyala',
 
     // API hataları
     'err.network': 'Sunucu yanıt vermedi. Bağlantı kontrol edilip sayfa yenilenebilir.',
     'err.http': 'Sunucu yanıtı {status}: {message}',
     'err.notFound': 'Bulunamadı. Başka bir sekmede silinmiş olabilir.',
-    'err.conflict': 'Daha yeni bir sürüm kaydedilmiş. Görmek için yenilenip yeniden düzenlenebilir.',
     'err.generic': 'Bir şey çalışmadı: {message}',
     'err.loading': 'Yükleniyor…',
 
@@ -2835,6 +2615,7 @@ const STRINGS = {
     'keys.errors': 'Hatalar’a git',
     'keys.live': 'Canlı’ya git',
     'keys.overview': 'Genel bakış’a git',
+    'keys.tags': 'Tag’ler ve trigger’lar’a git',
     'keys.theme': 'Temayı değiştir',
     'keys.help': 'Bu kısayolları göster',
     'keys.close': 'Paneli ya da pencereyi kapat',
@@ -2846,7 +2627,6 @@ const STRINGS = {
     'time.min': '{n} dk önce',
     'time.h': '{n} sa önce',
     'time.d': '{n} gün önce',
-    'time.ms': '{n} ms',
     'time.uptime': '{d} gün {h} sa',
     'time.uptimeShort': '{h} sa {m} dk',
     'time.uptimeMin': '{m} dk'
@@ -2870,8 +2650,6 @@ const EXTRA = {
     'kpi.serverErrors': 'Server errors',
     'kpi.serverErrors.help': 'Hits the server could not handle or turned away as busy.',
     'kpi.serverErrors.formula': '(5xx + refused as busy) ÷ (hits + refused as busy)',
-    'kpi.p95le': 'p95 ≤ {ms} ms',
-    'kpi.over5000': 'p95 over 5,000 ms',
     'kpi.latency.sub': 'mean {ms} ms',
     'kpi.latency.formula': 'upper bound of the histogram bucket',
     'kpi.countOf': '{n} of {total}',
@@ -2922,7 +2700,6 @@ const EXTRA = {
     'live.loading': 'Loading hits…',
     'live.loadingHit': 'Loading hit {id}…',
     'live.eventsPane': 'Events of this hit',
-    'live.hitLevel': 'Hit',
     'outcome.succeeded': 'succeeded',
     'outcome.failed': 'failed',
     'outcome.exception': 'exception',
@@ -2942,7 +2719,6 @@ const EXTRA = {
     'tags.noLogs': 'This tag logged nothing.',
     'tags.seeTriggers': 'See triggers',
     'tags.allEventsNote': 'Sends carry no event number, so they are listed for the whole hit.',
-    'problem.tagFailed': '{tag} failed, and no vendor answer was recorded.',
     'problem.tagFailedSend': '{tag} failed: {host} answered {status}.',
     'problem.exception': '{tag} threw an exception: {message}',
     'problem.timeout': '{tag} timed out.',
@@ -2971,10 +2747,8 @@ const EXTRA = {
     'vars.granted': 'granted',
     'vars.denied': 'denied',
     'vars.unknown': 'not set',
-    'vars.count': '{n} keys',
     'vars.noMatch': 'No key or value matches.',
     'vars.flags': 'Checks',
-    'req.decoded': 'Decoded',
     'req.raw': 'Raw',
     'req.curlHint': 'Hidden headers (cookie, authorization and the like) are left out of the command.',
     'req.header': 'Header',
@@ -2992,8 +2766,6 @@ const EXTRA = {
     'errors.what.tagNoSend': 'Tag failed, nothing sent',
     'errors.what.vendorRefused': 'Vendor refused',
     'errors.what.blocked': 'Send blocked',
-    'errors.skipped': 'Skipped, not errors',
-    'errors.skippedRow': 'reported success but sent nothing',
     'errors.pending': 'Reading the detail of {n} more hits…',
     'errors.hits': 'Hits in this group',
     'errors.groups': '{n} groups',
@@ -3021,21 +2793,17 @@ const EXTRA = {
     'container.notSet': 'not set',
     'container.tags': 'Tags',
     'container.notFiredCount': '{n} not fired',
-    'container.runs': '{ok} succeeded · {bad} failed · {exc} exceptions · {to} timed out',
-    'container.fired': 'Fires',
     'sites.seeHits': 'See hits',
     'sites.stat.sendsOk': 'Sends delivered',
     'sites.stat.sendsFailed': 'Sends failed',
     'sites.stat.tagsTotal': 'Tag runs',
     'sites.stat.delivery': 'Delivery rate',
     'density.compact': 'Compact rows',
-    'density.comfortable': 'Comfortable rows',
     'err.retryIn': 'Retrying in {n} s.',
     'err.asOf': 'As of {time}',
     'keys.event': 'Previous or next event',
     'keys.copyLink': 'Copy the link to the hit',
     'keys.or': 'or',
-    'http.status': 'Status',
     'keys.inputsOff': 'Shortcuts are off while focus is in a text field.'
   },
   tr: {
@@ -3054,8 +2822,6 @@ const EXTRA = {
     'kpi.serverErrors': 'Sunucu hataları',
     'kpi.serverErrors.help': 'Sunucunun işleyemediği ya da yoğunluktan geri çevirdiği hit’ler.',
     'kpi.serverErrors.formula': '(5xx + yoğunluktan reddedilen) ÷ (hit + yoğunluktan reddedilen)',
-    'kpi.p95le': 'p95 ≤ {ms} ms',
-    'kpi.over5000': 'p95 5.000 ms’nin üstünde',
     'kpi.latency.sub': 'ortalama {ms} ms',
     'kpi.latency.formula': 'histogram aralığının üst sınırı',
     'kpi.countOf': 'Toplam {total} içinde {n}',
@@ -3106,7 +2872,6 @@ const EXTRA = {
     'live.loading': 'Hit’ler yükleniyor…',
     'live.loadingHit': 'Hit yükleniyor: {id}…',
     'live.eventsPane': 'Bu hit’in event’leri',
-    'live.hitLevel': 'Hit',
     'outcome.succeeded': 'başarılı',
     'outcome.failed': 'başarısız',
     'outcome.exception': 'kod hatası',
@@ -3126,7 +2891,6 @@ const EXTRA = {
     'tags.noLogs': 'Bu tag log yazmadı.',
     'tags.seeTriggers': 'Trigger’ları gör',
     'tags.allEventsNote': 'Gönderimler event numarası taşımaz; bu yüzden hit’in tamamı için listelenir.',
-    'problem.tagFailed': 'Tag başarısız oldu, kayıtlı bir sağlayıcı yanıtı yok: {tag}',
     'problem.tagFailedSend': 'Tag başarısız: {tag} · {host} yanıtı: {status}',
     'problem.exception': 'Tag kod hatası verdi: {tag} · {message}',
     'problem.timeout': 'Tag zaman aşımına uğradı: {tag}',
@@ -3155,10 +2919,8 @@ const EXTRA = {
     'vars.granted': 'verildi',
     'vars.denied': 'reddedildi',
     'vars.unknown': 'tanımsız',
-    'vars.count': '{n} anahtar',
     'vars.noMatch': 'Eşleşen anahtar ya da değer yok.',
     'vars.flags': 'Kontroller',
-    'req.decoded': 'Çözülmüş',
     'req.raw': 'Ham',
     'req.curlHint': 'Gizli header’lar (cookie, authorization ve benzerleri) komuta eklenmez.',
     'req.header': 'Header',
@@ -3175,8 +2937,6 @@ const EXTRA = {
     'errors.what.tagNoSend': 'Tag başarısız, gönderim yok',
     'errors.what.vendorRefused': 'Sağlayıcı reddetti',
     'errors.what.blocked': 'Gönderim engellendi',
-    'errors.skipped': 'Atlananlar, hata değil',
-    'errors.skippedRow': 'başarı bildirdi ama hiçbir şey göndermedi',
     'errors.pending': '{n} hit’in daha ayrıntısı okunuyor…',
     'errors.hits': 'Bu gruptaki hit’ler',
     'errors.groups': '{n} grup',
@@ -3204,21 +2964,17 @@ const EXTRA = {
     'container.notSet': 'tanımsız',
     'container.tags': 'Tag’ler',
     'container.notFiredCount': 'tetiklenmeyen: {n}',
-    'container.runs': 'başarılı {ok} · başarısız {bad} · kod hatası {exc} · zaman aşımı {to}',
-    'container.fired': 'Tetiklenme',
     'sites.seeHits': 'Hit’leri gör',
     'sites.stat.sendsOk': 'Teslim edilen gönderim',
     'sites.stat.sendsFailed': 'Başarısız gönderim',
     'sites.stat.tagsTotal': 'Tag çalışması',
     'sites.stat.delivery': 'Teslim oranı',
     'density.compact': 'Dar satırlar',
-    'density.comfortable': 'Geniş satırlar',
     'err.retryIn': '{n} sn içinde yeniden denenecek.',
     'err.asOf': 'Son durum: {time}',
     'keys.event': 'Önceki ya da sonraki event',
     'keys.copyLink': 'Hit bağlantısını kopyala',
     'keys.or': 'ya da',
-    'http.status': 'Durum',
     'keys.inputsOff': 'Bir metin alanındayken kısayollar çalışmaz.'
   }
 };
@@ -3229,15 +2985,14 @@ const EDITOR = {
     'ed.add': 'Add tag',
     'ed.new': 'New tag',
     'ed.editTitle': 'Edit {name}',
-    'ed.lead': 'Saves are written to the container file and reach every instance within a few seconds.',
+    'ed.lead': 'Saves go to the draft. Visitors keep the live container until you publish.',
     'ed.back': 'All tags',
     'ed.editBtn': 'Edit tag',
-    'ed.on': 'On',
     'ed.off': 'Off',
     'ed.turnOff': 'Turn off',
     'ed.turnOn': 'Turn on',
     'ed.turnOff.confirmTitle': 'Turn off {name}?',
-    'ed.turnOff.confirmBody': 'The tag stays in the container but stops firing on every instance within a few seconds. Its settings stay, and it can be turned on again at any time.',
+    'ed.turnOff.confirmBody': 'The tag stays in the container but stops firing once the draft is published. Its settings stay, and it can be turned on again at any time.',
     'ed.turnedOff': 'Tag turned off: {name}',
     'ed.turnedOn': 'Tag turned on: {name}',
     'ed.moveUp': 'Move up',
@@ -3248,7 +3003,7 @@ const EDITOR = {
     'ed.order': 'Tags fire in this order, top first.',
     'ed.delete': 'Delete tag',
     'ed.delete.confirmTitle': 'Delete {name}?',
-    'ed.delete.confirmBody': 'The tag is removed from the container file and stops firing on every instance within a few seconds. Its settings, hidden values included, are removed too. This cannot be undone.',
+    'ed.delete.confirmBody': 'The tag is removed from the draft and stops firing once the draft is published. Its settings, hidden values included, are removed too.',
     'ed.delete.confirmType': 'Type {name} to confirm',
     'ed.deleted': 'Tag deleted: {name}',
     'ed.saved': 'Tag saved: {name}',
@@ -3257,7 +3012,7 @@ const EDITOR = {
     'ed.readonly.title': 'This container is read-only',
     'ed.readonly.reason': 'Reason from the server: {reason}',
     'ed.readonly.unknown': 'This server does not say whether its container can be edited.',
-    'ed.readonly.how': 'To edit tags here, start the server with {file} set to a container JSON file. Saves are written to that file and reach every instance within a few seconds.',
+    'ed.readonly.how': 'To edit tags here, start the server with {file} set to a container JSON file. Saves go to a draft and are written to that file when you publish.',
     'ed.section.tag': 'Tag',
     'ed.f.name': 'Tag name',
     'ed.f.name.help': 'Shown in hits and logs. Unique in this container, up to 100 characters.',
@@ -3352,15 +3107,14 @@ const EDITOR = {
     'ed.add': 'Tag ekle',
     'ed.new': 'Yeni tag',
     'ed.editTitle': 'Düzenleniyor: {name}',
-    'ed.lead': 'Kaydedilenler container dosyasına yazılır ve birkaç saniye içinde tüm instance’lara ulaşır.',
+    'ed.lead': 'Kaydedilenler taslağa yazılır. Siz yayınlayana kadar ziyaretçiler canlı container’ı kullanır.',
     'ed.back': 'Tüm tag’ler',
     'ed.editBtn': 'Tag’i düzenle',
-    'ed.on': 'Açık',
     'ed.off': 'Kapalı',
     'ed.turnOff': 'Kapat',
     'ed.turnOn': 'Aç',
     'ed.turnOff.confirmTitle': 'Tag kapatılsın mı: {name}',
-    'ed.turnOff.confirmBody': 'Tag container’da kalır ama birkaç saniye içinde tüm instance’larda tetiklenmez olur. Ayarları korunur; istendiğinde yeniden açılabilir.',
+    'ed.turnOff.confirmBody': 'Tag container’da kalır ama taslak yayınlanınca tetiklenmez olur. Ayarları korunur; istendiğinde yeniden açılabilir.',
     'ed.turnedOff': 'Tag kapatıldı: {name}',
     'ed.turnedOn': 'Tag açıldı: {name}',
     'ed.moveUp': 'Yukarı taşı',
@@ -3371,7 +3125,7 @@ const EDITOR = {
     'ed.order': 'Tag’ler bu sırayla, en üstteki önce olmak üzere tetiklenir.',
     'ed.delete': 'Tag’i sil',
     'ed.delete.confirmTitle': 'Tag silinsin mi: {name}',
-    'ed.delete.confirmBody': 'Tag container dosyasından çıkarılır ve birkaç saniye içinde tüm instance’larda tetiklenmez olur. Gizli değerler dahil ayarları da silinir. Bu işlem geri alınamaz.',
+    'ed.delete.confirmBody': 'Tag taslaktan çıkarılır ve taslak yayınlanınca tetiklenmez olur. Gizli değerler dahil ayarları da silinir.',
     'ed.delete.confirmType': 'Onay için tag adı yazılır: {name}',
     'ed.deleted': 'Tag silindi: {name}',
     'ed.saved': 'Tag kaydedildi: {name}',
@@ -3380,7 +3134,7 @@ const EDITOR = {
     'ed.readonly.title': 'Bu container salt okunur',
     'ed.readonly.reason': 'Sunucunun belirttiği neden: {reason}',
     'ed.readonly.unknown': 'Bu sunucu, container’ın düzenlenip düzenlenemeyeceğini bildirmiyor.',
-    'ed.readonly.how': 'Tag’leri burada düzenlemek için sunucu, bir container JSON dosyasını gösteren şu ayarla başlatılır: {file}. Kaydedilenler bu dosyaya yazılır ve birkaç saniye içinde tüm instance’lara ulaşır.',
+    'ed.readonly.how': 'Tag’leri burada düzenlemek için sunucu, bir container JSON dosyasını gösteren şu ayarla başlatılır: {file}. Kaydedilenler bir taslağa yazılır; yayınladığınızda bu dosyaya geçer.',
     'ed.section.tag': 'Tag',
     'ed.f.name': 'Tag adı',
     'ed.f.name.help': 'Hit’lerde ve log’larda görünür. Bu container’da tekildir, en fazla 100 karakter.',
@@ -3726,7 +3480,7 @@ function helpDialog() {
     [k('/'), 'keys.search'], [[k('j'), ' ', h('span', { text: t('keys.or') }), ' ', k('↓')], 'keys.next'], [[k('k'), ' ', h('span', { text: t('keys.or') }), ' ', k('↑')], 'keys.prev'],
     [k('Enter'), 'keys.open.hit'], [[k('['), ' ', k(']')], 'keys.event'], [[k('1'), '–', k('7')], 'keys.tabs'], [k('p'), 'keys.pause'], [k('c'), 'keys.copyLink'],
     [[k('g'), ' ', h('span', { text: t('keys.then') }), ' ', k('o')], 'keys.overview'], [[k('g'), ' ', h('span', { text: t('keys.then') }), ' ', k('l')], 'keys.live'],
-    [[k('g'), ' ', h('span', { text: t('keys.then') }), ' ', k('e')], 'keys.errors'], [k('t'), 'keys.theme'], [k('?'), 'keys.help'], [k('Esc'), 'keys.close']
+    [[k('g'), ' ', h('span', { text: t('keys.then') }), ' ', k('e')], 'keys.errors'], [[k('g'), ' ', h('span', { text: t('keys.then') }), ' ', k('t')], 'keys.tags'], [k('t'), 'keys.theme'], [k('?'), 'keys.help'], [k('Esc'), 'keys.close']
   ];
   const dl = h('dl', { class: 'keys' });
   for (const [keys, label] of rows) { dl.appendChild(h('dt', null, keys)); dl.appendChild(h('dd', { text: t(label) })); }

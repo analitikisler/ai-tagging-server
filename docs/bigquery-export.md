@@ -1,6 +1,6 @@
 # BigQuery export
 
-The `bigquery_export` tag writes each event as one row of a BigQuery table, using streaming inserts (`tabledata.insertAll`). It appears on `/admin` as a fourth card, **BigQuery export**, next to Meta, TikTok and Pinterest, with the same Save, on/off and "Send a test event" controls.
+The `bigquery_export` tag writes each event as one row of a BigQuery table, using streaming inserts (`tabledata.insertAll`). It appears on `/admin` as a card, **BigQuery export**, next to the ad platforms, with the same Save, on/off and "Send a test event" controls.
 
 This guide covers what to set up in Google Cloud, which settings the server needs, and how to check that rows arrive.
 
