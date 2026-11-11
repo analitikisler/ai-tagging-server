@@ -19,8 +19,7 @@ const NAMES = {
 const WITH_ITEMS = ['ADD_TO_CART', 'ADD_TO_WISHLIST', 'PURCHASE'];
 const WITH_VALUE = ['ADD_TO_CART', 'ADD_TO_WISHLIST', 'PURCHASE', 'LEAD', 'SIGN_UP'];
 
-if (!data.pixel_id || !data.access_token) {
-  data.gtmOnFailure();
+if (missing(['pixel_id', 'access_token'])) {
   return;
 }
 

@@ -182,8 +182,8 @@ These need the admin console (`ADMIN_TOKEN`). They work without the AI; with it,
 | Key event dropped | 70% below usual (a warning at 50% when 20 or more are usual) |
 | Vendor refusing sends | 20% or more of 20 or more sends failed, at least twice the usual rate |
 | Tag failing | 20% or more of 20 or more runs failed, threw or timed out, at least twice the usual rate. Runs that skipped their event don't count either way |
-| Value missing | `value` or `currency` on purchases, or `event_id` on key events when Meta or TikTok are sent to, missing on 20% or more |
-| Unclaimed hits | 20% or more of 20 or more hits no client claimed |
+| Value missing | `value` or `currency` on purchases, or `event_id` on key events when Meta or TikTok are sent to, missing on 20% or more of 10 or more events, at least twice the usual rate |
+| Unclaimed hits | 20% or more of 20 or more hits no client claimed, at least twice the usual rate |
 | Event renamed | a name never seen before (10 or more) while one spelled the same but for case or separators falls by half (`purchase` → `Purchase`) |
 
 Key events are `purchase`, `generate_lead`, `sign_up` and `add_to_cart` by default, set on the console's Alerts page. Drops, stops and renames wait for 3 days of history. "Usual" is the median of the earlier days; rates are pooled over them. An alert names the setup changes made in the 3 hours before it started, gets the AI's likely cause when the AI is on, and is posted to Slack (`SLACK_WEBHOOK_URL`, in English or Turkish) when it opens, when it gets worse (at most hourly) and when it resolves; a check posts at most 5 messages, and one Slack didn't take goes out with the next check. An alert resolves when a check finds its condition healthy again: an hour with too little traffic to tell leaves it open, for a day at most. Checks run every `ALERT_INTERVAL_S` on a server that keeps running, and from `POST /admin/api/alerts/check` (the deploy script's Cloud Scheduler job, every 5 minutes, with `CHECK_TOKEN`); a lock in the state folder keeps two from running at once.

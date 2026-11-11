@@ -3931,6 +3931,8 @@ function toggleTheme() {
 }
 function rerenderAll() {
   const active = document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute('data-nav');
+  const skip = $('.skip-link');
+  if (skip) skip.textContent = t('app.skip');
   renderShell();
   S.view = null;
   onRoute();
@@ -7439,7 +7441,11 @@ VIEWS.integrations = {
   if (dn === 'compact') document.documentElement.setAttribute('data-density', 'compact');
   setLang(lsGet(PREF.lang) === 'tr' ? 'tr' : 'en');
   const skip = $('.skip-link');
-  if (skip) skip.textContent = t('app.skip');
+  if (skip) {
+    skip.textContent = t('app.skip');
+    // Its address would be read as a page of the console; it only moves focus.
+    skip.addEventListener('click', (e) => { e.preventDefault(); const m = $('#main'); if (m) m.focus(); });
+  }
   if (!S.token) { showSignin(); return; }
   api('GET', '/admin/api/overview').then(startApp, (e) => {
     if (e.status === 401) return; // onUnauthorized already showed the sign-in

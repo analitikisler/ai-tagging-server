@@ -183,9 +183,15 @@ const lookupExtra = (done) => {
   const url = cfg.url + (cfg.url.indexOf('?') === -1 ? '?' : '&') + keyName + '=' + encodeUriComponent(id);
   sendHttpRequest(url, { method: 'GET', headers: headers, timeout: 2000 }).then(
     (res) => {
-      const body = res.statusCode >= 200 && res.statusCode < 300 ? JSON.parse(res.body) : undefined;
+      // Only a good answer is kept: one failure doesn't turn the lookup
+      // off for this visitor for the next five minutes.
+      const ok = res.statusCode >= 200 && res.statusCode < 300;
+      let body;
+      if (ok) {
+        try { body = JSON.parse(res.body); } catch (e) { body = undefined; }
+      }
       const v = body && typeof body === 'object' ? body : {};
-      templateDataStorage.setItemCopy(cacheKey, { t: now, v: v });
+      if (ok && body && typeof body === 'object') templateDataStorage.setItemCopy(cacheKey, { t: now, v: v });
       done(v);
     },
     () => done({})

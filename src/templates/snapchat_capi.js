@@ -16,8 +16,7 @@ const NAMES = {
   sign_up: 'SIGN_UP',
 };
 
-if (!data.pixel_id || !data.access_token) {
-  data.gtmOnFailure();
+if (missing(['pixel_id', 'access_token'])) {
   return;
 }
 

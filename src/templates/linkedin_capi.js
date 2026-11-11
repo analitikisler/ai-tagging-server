@@ -8,8 +8,7 @@
 // Tag by `eventId`.
 const API_VERSION = '202608';
 
-if (!data.access_token || !data.conversions) {
-  data.gtmOnFailure();
+if (missing(['access_token', 'conversions'])) {
   return;
 }
 

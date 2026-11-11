@@ -10,15 +10,7 @@
 const generateRandom = require('generateRandom');
 const API = 'https://ads-api.twitter.com/12/measurement/conversions/';
 
-if (
-  !data.pixel_id ||
-  !data.event_ids ||
-  !data.consumer_key ||
-  !data.consumer_secret ||
-  !data.access_token ||
-  !data.access_token_secret
-) {
-  data.gtmOnFailure();
+if (missing(['pixel_id', 'event_ids', 'consumer_key', 'consumer_secret', 'access_token', 'access_token_secret'])) {
   return;
 }
 
