@@ -358,7 +358,7 @@ pub fn compile_conditions(conditions: &mut [Condition]) -> Result<(), String> {
 }
 
 /// Whether a tag fires for an event, and how each of its conditions went.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trigger {
     pub event: usize,
     pub tag: String,
@@ -368,12 +368,12 @@ pub struct Trigger {
     pub enabled: bool,
     pub conditions: Vec<Check>,
     /// The transformations that changed the event this tag saw.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transformed_by: Vec<String>,
 }
 
 /// One `fire_when` condition against one event.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Check {
     pub key: String,
     pub op: Op,

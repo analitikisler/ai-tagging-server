@@ -30,10 +30,11 @@ use crate::integrations::{Enrichment, Integrations, TestOverrides, test_event};
 use crate::metrics::{self, METRICS};
 use crate::replay::{self, Hit};
 use crate::request::{IncomingRequest, remote_address, same};
+use crate::sandbox::RunResult;
 use crate::server::{Pool, Target, summarize};
 use crate::state::State as StateStore;
 use crate::tenants::{Tenant, Tenants};
-use crate::traces::{self, Filter, Traces};
+use crate::traces::{self, Filter, Record, Traces};
 use crate::transform::{self, Transformation};
 
 const CONSOLE: &str = include_str!("ui/console.html");
@@ -400,16 +401,18 @@ async fn ai_explain(
         return error(StatusCode::NOT_FOUND, "no such trace, or no longer kept");
     };
     // A preview hit ran the draft; any other ran the live container.
-    let container = if t["tenant"] == "preview" {
+    let container = if t.tenant.as_deref() == Some("preview") {
         container_for(&a, None)
     } else {
-        live_container_for(&a, t["tenant"].as_str())
+        live_container_for(&a, t.tenant.as_deref())
     };
     let container = match container {
         Ok(c) => c,
         Err(r) => return *r,
     };
-    match explain::explain(ai, id, &traces::for_ai(&t), &container, q.lang.as_deref()).await {
+    let mut trace = traces::for_ai(&t);
+    trace["id"] = json!(id);
+    match explain::explain(ai, id, &trace, &container, q.lang.as_deref()).await {
         Ok(v) => ok(v),
         Err(e) => ai_error(e),
     }
@@ -501,12 +504,8 @@ async fn ai_audit(
         Ok(c) => c,
         Err(r) => return *r,
     };
-    let hits: Vec<(u64, Value)> = a
-        .traces
-        .details(tenant)
-        .iter()
-        .map(|(id, t)| (*id, traces::for_ai(t)))
-        .collect();
+    // Only counts made from the hits go to the AI, never the hits.
+    let hits = a.traces.details(tenant);
     let retries = METRICS
         .send_retries
         .load(std::sync::atomic::Ordering::Relaxed);
@@ -536,7 +535,7 @@ async fn trace(State(a): State<Admin>, headers: HeaderMap, Path(id): Path<u64>) 
         return *r;
     }
     match a.traces.get(id) {
-        Some(t) => ok(t),
+        Some(t) => ok(traces::with_id(id, &*t)),
         None => error(StatusCode::NOT_FOUND, "no such trace, or no longer kept"),
     }
 }
@@ -1044,32 +1043,29 @@ pub async fn run_alert_check(a: &Admin) -> Value {
 
 /// Whether a hit's run shows what an alert is about: a refused send to its
 /// vendor, a failed run of its tag, an unclaimed hit, or its event.
-fn shows_alert(alert: &Alert, r: &Value) -> bool {
+fn shows_alert(alert: &Alert, r: &RunResult) -> bool {
     let subject = alert.subject.as_str();
     // An event's name can hold dots, so only a missing value's key and a
     // rename's new name are cut off the subject.
     let event = match alert.kind {
         AlertKind::VendorFailing => {
-            return r["sends"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|s| s["url"].as_str().is_some_and(|u| u.contains(subject)))
-                .any(|s| s["result"]["Ok"].as_u64().is_none_or(|c| c >= 400));
+            return r
+                .sends
+                .iter()
+                .any(|s| s.url.contains(subject) && !s.accepted());
         }
         AlertKind::TagFailing => {
-            return r["tags"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|x| x["tag"] == subject && checkup::failed_run(x));
+            return r
+                .tags
+                .iter()
+                .any(|t| t.tag == subject && t.outcome.went_wrong());
         }
-        AlertKind::Unclaimed => return r["claimed_by"].is_null(),
+        AlertKind::Unclaimed => return r.claimed_by.is_none(),
         AlertKind::MissingValue => subject.rsplit_once('.').map_or(subject, |(e, _)| e),
         AlertKind::NameChanged => subject.split('→').next().unwrap_or(subject),
         AlertKind::EventStopped | AlertKind::EventDrop => subject,
     };
-    r["events"].as_array().into_iter().flatten().any(|e| {
+    r.events.iter().any(|e| {
         e["event_name"]
             .as_str()
             .is_some_and(|n| n.eq_ignore_ascii_case(event))
@@ -1079,13 +1075,12 @@ fn shows_alert(alert: &Alert, r: &Value) -> bool {
 /// The AI's diagnosis of a new alert, with a few recent hits that show it.
 async fn explain_alert(a: &Admin, ai: &Ai, alert: &Alert) -> Option<Value> {
     let site = Some(alert.site.as_str()).filter(|s| !s.is_empty());
-    let shows = |t: &Value| shows_alert(alert, &t["result"]);
     let hits: Vec<Value> = a
         .traces
-        .details(site)
+        .details_where(site, 3, |t| {
+            t.result.as_ref().is_some_and(|r| shows_alert(alert, r))
+        })
         .iter()
-        .filter(|(_, t)| shows(t))
-        .take(3)
         .map(|(_, t)| traces::for_ai(t))
         .collect();
     let container = live_container_for(a, site).unwrap_or(Value::Null);
@@ -1158,17 +1153,13 @@ async fn alerts_test(State(a): State<Admin>, headers: HeaderMap) -> Response {
 fn replay_hits(a: &Admin, tenant: Option<&str>) -> Vec<Hit> {
     let mut hits: Vec<Hit> = a
         .traces
-        .details_where(tenant, replay::MAX_HITS, |t| {
-            t.get("result").is_some_and(|r| !r.is_null())
-        })
+        .details_where(tenant, replay::MAX_HITS, |t| t.result.is_some())
         .into_iter()
-        .filter_map(|(id, t)| {
-            Some(Hit {
-                trace: Some(id),
-                pinned: None,
-                at: t["at"].as_u64().unwrap_or(0),
-                request: replay::request(&t["request"])?,
-            })
+        .map(|(id, t)| Hit {
+            trace: Some(id),
+            pinned: None,
+            at: t.at,
+            request: t.request.to_request(),
         })
         .collect();
     for p in pinned_list(a) {
@@ -1241,17 +1232,14 @@ async fn pin(State(a): State<Admin>, headers: HeaderMap, body: Bytes) -> Respons
     let Some(t) = a.traces.get(b.trace) else {
         return error(StatusCode::NOT_FOUND, "no such trace, or no longer kept");
     };
-    let at = t["at"].as_u64().unwrap_or(0);
     let id = format!("{}-{}", crate::state::now_ms(), b.trace);
     // A hit made while previewing is a test case like any other, not one
     // for a site called "preview".
-    let tenant = t["tenant"].as_str().filter(|t| *t != "preview");
-    let mut entry = replay::pinned_entry(&id, label, tenant, at, &t["request"]);
+    let tenant = t.tenant.as_deref().filter(|t| *t != "preview");
+    let mut entry = replay::pinned_entry(&id, label, tenant, t.at, &t.request);
     entry["events"] = json!(
-        t["result"]["events"]
-            .as_array()
-            .into_iter()
-            .flatten()
+        t.events()
+            .iter()
             .filter_map(|e| e["event_name"].as_str())
             .collect::<Vec<_>>()
     );
@@ -1393,9 +1381,7 @@ async fn live_view(
         &code,
         since,
         // Polled every few seconds: only the hits since the check began.
-        &a.traces.details_where(None, usize::MAX, |t| {
-            t.get("at").and_then(Value::as_u64).unwrap_or(0) >= since
-        }),
+        &a.traces.details_where(None, usize::MAX, |t| t.at >= since),
         &container,
         &pixels,
     ))
@@ -1479,7 +1465,7 @@ async fn checkup_view(
     })
     .await
     .unwrap_or_default();
-    let hits: Vec<Value> = a
+    let hits: Vec<Arc<Record>> = a
         .traces
         .details_where(tenant, 200, |_| true)
         .into_iter()
