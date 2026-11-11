@@ -813,7 +813,7 @@
   @media (max-width: 599px) { .table[data-vars] table { table-layout: auto; } }
 }
 @layer utilities { .view:focus, .view:focus-visible { outline: none; } }
-@layer components { @media (max-width: 599px) { .live-status > .status { display: none; } .list-meta [data-live-word] { display: inline; } } .list-meta [data-live-word] { display: none; } }
+@layer components { .list-meta [data-live-word] { display: none; } @media (max-width: 599px) { .live-status > .status { display: none; } .list-meta [data-live-word] { display: inline; } } }
 @layer components {
   @media (max-width: 599px) {
     .ctally { grid-template-columns: minmax(4rem, max-content) minmax(0, 1fr); }
@@ -1256,7 +1256,7 @@ const STRINGS = {
     'ft.drafts.line': 'Edits collect in a draft you can preview in your own browser before publishing.',
     'ft.drafts.how': 'Needs a container file the server can write (CONTAINER_FILE). The built-in container is set with environment variables instead.',
     'ft.alerts.name': 'Tracking alerts',
-    'ft.alerts.line': 'Warns when hits or a platform’s sends drop compared with the same hour last week.',
+    'ft.alerts.line': 'Warns when hits or a platform’s sends drop compared with the same hour on the 7 days before.',
     'ft.alerts.how': 'Alerts show on the Alerts page. Set SLACK_WEBHOOK_URL to get them in Slack too.',
     'ft.alerts.slack': 'Console and Slack',
     'ft.alerts.console': 'Console only',
@@ -2243,7 +2243,7 @@ const STRINGS = {
     'ft.drafts.line': 'Değişiklikler bir taslakta toplanır; yayınlamadan önce kendi tarayıcınızda önizlersiniz.',
     'ft.drafts.how': 'Sunucunun yazabildiği bir container dosyası gerekir (CONTAINER_FILE). Yerleşik container bunun yerine ortam değişkenleriyle ayarlanır.',
     'ft.alerts.name': 'Takip uyarıları',
-    'ft.alerts.line': 'Hit’ler ya da bir platformun gönderimleri geçen haftanın aynı saatine göre düşünce uyarır.',
+    'ft.alerts.line': 'Hit’ler ya da bir platformun gönderimleri önceki 7 günün aynı saatine göre düşünce uyarır.',
     'ft.alerts.how': 'Uyarılar Uyarılar sayfasında görünür. Slack’e de gelmesi için SLACK_WEBHOOK_URL ayarlayın.',
     'ft.alerts.slack': 'Konsol ve Slack',
     'ft.alerts.console': 'Yalnızca konsol',
@@ -2933,7 +2933,7 @@ const EXTRA = {
     'outcome.unclaimed': 'not claimed',
     'outcome.clientError': 'client error',
     'tags.skipped': 'Skipped',
-    'tags.skippedHelp': 'The tag reported success but sent nothing: the event has no vendor equivalent, or consent was denied.',
+    'tags.skippedHelp': 'The tag chose not to send: the event has no vendor equivalent, or consent was denied.',
     'tags.notRun': 'Did not run',
     'tags.notRunHelp': 'The trigger matched, but the time budget ran out before the tag started.',
     'tags.sendsOf': 'Sends from this tag',
@@ -3117,7 +3117,7 @@ const EXTRA = {
     'outcome.unclaimed': 'üstlenilmedi',
     'outcome.clientError': 'client hatası',
     'tags.skipped': 'Atlandı',
-    'tags.skippedHelp': 'Tag başarı bildirdi ama hiçbir şey göndermedi: event’in platformda karşılığı yok ya da izin reddedildi.',
+    'tags.skippedHelp': 'Tag göndermemeyi seçti: event’in platformda karşılığı yok ya da izin reddedildi.',
     'tags.notRun': 'Çalışmadı',
     'tags.notRunHelp': 'Trigger eşleşti, ancak tag başlamadan süre doldu.',
     'tags.sendsOf': 'Bu tag’in gönderimleri',
@@ -3744,7 +3744,8 @@ const VIEW_KEYS = ['overview', 'live', 'errors', 'alerts', 'container', 'transfo
 function viewAvailable(v) {
   if (v === 'sites') return S.mode === 'multi';
   if (v === 'integrations') return S.mode === 'integrated';
-  if (v === 'audit' || v === 'setup') return aiOn();
+  if (v === 'audit') return aiOn();
+  if (v === 'setup') return aiOn() && S.mode !== 'multi';
   return VIEW_KEYS.indexOf(v) >= 0;
 }
 function defaultView() {
@@ -3806,6 +3807,7 @@ async function loadTraces() {
   if (S.loaded && (j.latest || 0) < S.latest) {
     // Ids went backwards: the server restarted or this is another instance. Start over.
     S.traces.clear(); S.ids = []; S.details.clear(); S.gone.clear(); S.latest = 0; S.loaded = false;
+    S.search = { q: S.search.q, ids: null, latest: 0 }; AI.explain.clear();
     j = await api('GET', '/admin/api/traces?limit=500');
   }
   const first = !S.loaded;
@@ -3952,6 +3954,7 @@ function stopAll() {
   clearTimeout(S.pollTimer); clearTimeout(overviewTimer);
   S.traces.clear(); S.ids = []; S.loaded = false; S.latest = 0; S.details.clear(); S.containers.clear(); S.tenants = null; S.integrations = null;
   S.search = { q: '', ids: null, latest: 0 }; S.view = null;
+  S.gone.clear(); S.detailReq.clear(); S.oldest = null; AI.explain.clear();
 }
 function signOut() {
   S.token = ''; ssSet(TOKEN_KEY, null);
@@ -4000,11 +4003,11 @@ function showSignin() {
     show.textContent = vis ? t('signin.hide') : t('signin.show');
   });
   const msg = h('p', { class: 'message', id: 'tok-m', 'aria-live': 'polite' });
-  const say = (key, tone) => {
+  const say = (key, tone, p) => {
     clear(msg);
     if (!key) return;
     msg.appendChild(status(tone || 'bad', tone === 'ok' ? t('severity.ok') : t('severity.bad')));
-    msg.appendChild(h('span', { text: t(key) }));
+    msg.appendChild(h('span', { text: t(key, p) }));
     input.setAttribute('aria-invalid', tone === 'ok' ? 'false' : 'true');
   };
   const submit = h('button', { class: 'button', 'data-variant': 'primary', type: 'submit' }, t('signin.submit'));
@@ -4037,7 +4040,7 @@ function showSignin() {
     } catch (err) {
       S.token = ''; S.signingIn = false;
       submit.removeAttribute('aria-busy'); submit.disabled = false; submit.textContent = t('signin.submit');
-      say(err.status === 401 ? 'signin.wrong' : err.network ? 'signin.unreachable' : 'err.generic');
+      say(err.status === 401 ? 'signin.wrong' : err.network ? 'signin.unreachable' : 'err.generic', 'bad', { message: err.raw || err.message });
       input.focus(); input.select();
     }
   });
@@ -4352,6 +4355,7 @@ function eventTagRows(d, n) {
     if (run) {
       const o = run.outcome;
       if (o === 'success') kind = sends.length ? 'fired' : 'skipped';
+      else if (o === 'skipped') kind = 'skipped';
       else if (o === 'timeout') kind = 'timeout';
       else if (o === 'exception' || run.error) kind = 'exception';
       else kind = 'failed';
@@ -4395,6 +4399,7 @@ function rowReason(row) {
     if (row.logs.length) return code(row.logs[row.logs.length - 1]);
     return document.createTextNode(t('tags.failedHelp'));
   }
+  if (row.kind === 'skipped' && row.run && row.run.skip) return code(row.run.skip);
   if (row.kind === 'fired') {
     const ok = row.sends.filter(sendOk).length;
     return document.createTextNode(t('out.count', { ok: ok, total: row.sends.length }));
@@ -4868,6 +4873,7 @@ function hitRow(s, current) {
     if (tg.failure) res.appendChild(status('bad', tg.failure + ' ' + t('outcome.failed')));
     if (tg.exception) res.appendChild(status('risk', tg.exception + ' ' + t('outcome.exception')));
     if (tg.timeout) res.appendChild(status('warn', tg.timeout + ' ' + t('outcome.timedOut')));
+    if (tg.skipped) res.appendChild(status('muted', tg.skipped + ' ' + t('outcome.skipped')));
     const sn = s.sends || {};
     if ((sn.ok || 0) + (sn.failed || 0)) res.appendChild(h('span', { class: 'meta', text: t('live.sendsSummary', { ok: sn.ok || 0, bad: sn.failed || 0 }) }));
   }
@@ -5302,7 +5308,7 @@ function summaryCauses(s) {
   const seen = new Set();
   let tagFail = false;
   for (const run of s.tag_runs || []) {
-    if (run.outcome === 'success') continue;
+    if (run.outcome === 'success' || run.outcome === 'skipped') continue;
     const kind = run.outcome === 'timeout' ? 'tagTimeout' : run.outcome === 'exception' ? 'tagException' : 'tagFailure';
     const k = kind + run.tag;
     tagFail = true;
@@ -5321,12 +5327,12 @@ function detailMessages(d, c) {
   if (!r) return [];
   if (c.kind === 'clientError') return [{ text: r.client_error || '' }];
   if (c.kind === 'sendFailed') {
-    const failedTags = new Set((r.tags || []).filter((x) => x.outcome !== 'success').map((x) => x.tag));
+    const failedTags = new Set((r.tags || []).filter((x) => x.outcome !== 'success' && x.outcome !== 'skipped').map((x) => x.tag));
     return (r.sends || []).filter((s) => !sendOk(s) && !failedTags.has(s.from)).map((s) => sendMsg(s));
   }
   const out = [];
   for (const x of r.tags || []) {
-    if (x.tag !== c.target || x.outcome === 'success') continue;
+    if (x.tag !== c.target || x.outcome === 'success' || x.outcome === 'skipped') continue;
     if (c.kind === 'tagException' && (x.outcome === 'exception' || x.error)) out.push({ text: x.error || '', sub: 'tagException' });
     else if (c.kind === 'tagTimeout' && x.outcome === 'timeout') out.push({ text: '', sub: 'tagTimeout' });
     else if (c.kind === 'tagFailure' && x.outcome === 'failure' && !x.error) {
@@ -5429,10 +5435,10 @@ function errorRow(g, expanded) {
       fill();
       fetchDetails(g.hits.slice(0, 10), () => { if (S.view === 'errors') VIEWS.errors.onData(); });
       const r = parseRoute();
-      if (r.parts[1] !== g.id) history.replaceState(null, '', hashFor(['errors', g.id], scopeQuery()));
+      if (r.parts[1] !== g.id) { history.replaceState(null, '', hashFor(['errors', g.id], scopeQuery())); S.route = parseRoute(); }
     } else {
       const r = parseRoute();
-      if (r.parts[1] === g.id) history.replaceState(null, '', hashFor(['errors'], scopeQuery()));
+      if (r.parts[1] === g.id) { history.replaceState(null, '', hashFor(['errors'], scopeQuery())); S.route = parseRoute(); }
     }
   });
   if (expanded) fill();
@@ -5440,7 +5446,7 @@ function errorRow(g, expanded) {
 }
 const E = { box: null };
 VIEWS.errors = {
-  mount(main) { E.box = inner(main); this.onData(); },
+  mount(main) { E.box = inner(main); E.scrolled = false; this.onData(); },
   update() { this.onData(); },
   unmount() { E.box = null; },
   onData() {
@@ -5469,7 +5475,7 @@ VIEWS.errors = {
     const missing = want.filter((id) => !S.details.has(id) && !S.gone.has(id));
     if (missing.length) {
       box.appendChild(h('p', { class: 'loading', text: t('errors.pending', { n: missing.length }) }));
-      if (!E.fetching) { E.fetching = true; fetchDetails(missing, () => { if (S.view === 'errors') VIEWS.errors.onData(); }).then(() => { E.fetching = false; if (S.view === 'errors') VIEWS.errors.onData(); }); }
+      if (!E.fetching) { E.fetching = true; fetchDetails(missing, () => { if (S.view === 'errors') VIEWS.errors.onData(); }).then(() => { E.fetching = false; }); }
     }
     const list = h('div', { class: 'panel' }, h('div', { class: 'panel__body' }));
     for (const g of groups) list.firstChild.appendChild(errorRow(g, keepOpen.has(g.id)));
@@ -5535,7 +5541,7 @@ function publishDialog(c, tenant, refresh) {
 }
 
 // ===== Setup check =====
-const CK = { box: null, data: null, error: null, busy: false, todo: null, todoBusy: false, todoError: null, live: null, liveData: null, timer: 0 };
+const CK = { box: null, tenant: '', data: null, error: null, busy: false, todo: null, todoBusy: false, todoError: null, live: null, liveData: null, timer: 0 };
 function ckText(it) {
   const p = Object.assign({}, it.params || {});
   for (const k of Object.keys(p)) if (Array.isArray(p[k])) p[k] = p[k].join(', ');
@@ -5553,20 +5559,25 @@ VIEWS.checkup = {
     CK.box = inner(main); CK.todo = null;
     if (!containerNow('') && S.mode !== 'multi') getContainer('').then(() => { if (S.view === 'checkup') this.renderLive(); }, () => {});
     this.load(false);
+    // A live check started before the page was left goes on.
+    if (CK.live) this.pollLive();
   },
-  update() { this.render(); },
+  update() {
+    if (this.tenant() !== CK.tenant) { CK.data = null; CK.todo = null; this.load(false); return; }
+    this.render();
+  },
   unmount() { CK.box = null; clearTimeout(CK.timer); },
   tenant() { return S.mode === 'multi' ? (tenantScope() || (S.tenants && S.tenants[0] ? S.tenants[0].id : '')) : ''; },
   q(extra) { const tn_ = this.tenant(); const parts = []; if (tn_) parts.push('tenant=' + encodeURIComponent(tn_)); if (extra) parts.push(extra); return parts.length ? '?' + parts.join('&') : ''; },
   load(refresh) {
-    CK.busy = true; this.render();
+    CK.busy = true; CK.tenant = this.tenant(); this.render();
     api('GET', '/admin/api/checkup' + this.q(refresh ? 'refresh=true' : '')).then((v) => { CK.data = v; CK.error = null; }, (e) => { CK.error = e; })
       .then(() => { CK.busy = false; if (S.view === 'checkup') this.render(); });
   },
   pollLive() {
     clearTimeout(CK.timer);
     if (!CK.live || S.view !== 'checkup') return;
-    api('GET', '/admin/api/checkup/live/' + CK.live.code).then((v) => { CK.liveData = v; if (S.view === 'checkup') this.renderLive(); }, () => {});
+    if (!document.hidden) api('GET', '/admin/api/checkup/live/' + CK.live.code).then((v) => { CK.liveData = v; if (S.view === 'checkup') this.renderLive(); }, () => {});
     CK.timer = setTimeout(() => this.pollLive(), 3000);
   },
   render() {
@@ -5687,7 +5698,7 @@ VIEWS.checkup = {
         for (const k of ['value', 'currency', 'transaction_id', 'event_id', 'user_data', 'consent', 'ad_click']) {
           if (ev.has[k]) chips.appendChild(h('span', { class: 'tag', 'data-variant': 'plain', text: t('ck.has.' + k) }));
         }
-        const tags = h('span', { class: 'status-row' }, (ev.tags || []).map((x) => status(x.outcome === 'success' ? 'ok' : 'bad', x.tag)));
+        const tags = h('span', { class: 'status-row' }, (ev.tags || []).map((x) => status(x.outcome === 'success' ? 'ok' : x.outcome === 'skipped' ? 'muted' : 'bad', x.tag)));
         ul.appendChild(h('li', null, h('span', { class: 'meta', text: clock(hit.at) }), h('span', { class: 'stack gap-1' },
           h('span', { class: 'cluster' }, h('a', { href: hitHash(hit.trace), class: 'strong', text: ev.name || '' }), chips),
           tags, hit.sends_failed ? h('span', { class: 'note', text: t('ck.sendsFailed', { failed: hit.sends_failed, sends: hit.sends }) }) : null)));
@@ -5903,7 +5914,7 @@ VIEWS.history = {
     let c = containerNow('');
     if (!c) { try { await getContainer(''); c = containerNow(''); } catch (err) { toast('bad', err.raw || err.message); return; } }
     try {
-      await checkedApi('POST', '/admin/api/history/' + encodeURIComponent(e.id) + '/undo', { revision: c.revision });
+      await checkedApi('POST', '/admin/api/history/' + encodeURIComponent(e.id) + '/undo', { revision: (c.draft && c.draft.live_revision) || c.revision });
       S.containers.delete(key);
       toast('ok', t('hist.undone'));
       this.load();
@@ -6332,7 +6343,7 @@ const O = { box: null };
 VIEWS.overview = {
   mount(main) { O.box = inner(main); this.onData(); },
   update() { this.onData(); },
-  unmount() { O.box = null; clearTimeout(overviewTimer); },
+  unmount() { O.box = null; clearTimeout(overviewTimer); overviewTimer = setTimeout(refreshOverview, 60000); },
   onData() {
     const box = O.box;
     if (!box || !S.overview) return;
@@ -6389,7 +6400,7 @@ VIEWS.overview = {
     if (S.cap && S.loaded) {
       const ids = scopedIds();
       const c = { ok: 0, error: 0, unclaimed: 0, refused: 0 };
-      const runs = { success: 0, failure: 0, exception: 0, timeout: 0 };
+      const runs = { success: 0, failure: 0, exception: 0, timeout: 0, skipped: 0 };
       for (const id of ids) { const s = S.traces.get(id); c[hitKind(s)]++; for (const r of s.tag_runs || []) runs[r.outcome] = (runs[r.outcome] || 0) + 1; }
       const sb = h('div', { class: 'stack' },
         minibars([['bad', t('hits.error'), c.error], ['warn', t('hits.unclaimed'), c.unclaimed], ['risk', t('hits.refused'), c.refused], ['ok', t('hits.ok'), c.ok]]),
@@ -6640,7 +6651,7 @@ VIEWS.container = {
     for (const id of ids) {
       const s = S.traces.get(id);
       if (s.client) claimed[s.client] = (claimed[s.client] || 0) + 1;
-      for (const r of s.tag_runs || []) { const x = runs[r.tag] = runs[r.tag] || { success: 0, failure: 0, exception: 0, timeout: 0, n: 0 }; x[r.outcome]++; x.n++; }
+      for (const r of s.tag_runs || []) { const x = runs[r.tag] = runs[r.tag] || { success: 0, failure: 0, exception: 0, timeout: 0, skipped: 0, n: 0 }; x[r.outcome]++; x.n++; }
     }
     // Clients
     const N = t('clients.col.name'), T = t('clients.col.template'), CL = t('clients.col.claimed'), DA = t('clients.col.data');
@@ -6655,7 +6666,7 @@ VIEWS.container = {
     const focusTag = S.route.parts[1] === 'tag' ? S.route.parts[2] : null;
     const fileNames = c.tags.filter((x) => tagEditable(c, x)).map((x) => x.name);
     for (const tg of c.tags) {
-      const x = runs[tg.name] || { success: 0, failure: 0, exception: 0, timeout: 0, n: 0 };
+      const x = runs[tg.name] || { success: 0, failure: 0, exception: 0, timeout: 0, skipped: 0, n: 0 };
       const off = tg.enabled === false;
       const counts = h('span', { class: 'status-row' });
       if (S.cap) {
@@ -6663,6 +6674,7 @@ VIEWS.container = {
         if (x.failure) counts.appendChild(status('bad', x.failure + ' ' + t('outcome.failed')));
         if (x.exception) counts.appendChild(status('risk', x.exception + ' ' + t('outcome.exception')));
         if (x.timeout) counts.appendChild(status('warn', x.timeout + ' ' + t('outcome.timedOut')));
+        if (x.skipped) counts.appendChild(status('muted', x.skipped + ' ' + t('outcome.skipped')));
         counts.appendChild(status('muted', t('container.notFiredCount', { n: Math.max(0, totalEvents - x.n) })));
       }
       const failing = x.failure + x.exception + x.timeout;
@@ -6678,7 +6690,12 @@ VIEWS.container = {
           h('p', { class: 'section-label', text: t('container.col.data') }), dataKv(tg.data),
           failing && S.cap ? h('p', null, h('a', { href: hashFor(['live'], q) }, t('container.seeFailing'))) : null,
           c.editable ? this.tagActions(c, tg, fileNames) : null));
-      det.addEventListener('toggle', () => { if (det.open) history.replaceState(null, '', hashFor(['container', 'tag', tg.name], scopeQuery())); });
+      det.addEventListener('toggle', () => {
+        if (det.open) history.replaceState(null, '', hashFor(['container', 'tag', tg.name], scopeQuery()));
+        else if (S.route.parts[1] === 'tag' && S.route.parts[2] === tg.name) history.replaceState(null, '', hashFor(['container'], scopeQuery()));
+        else return;
+        S.route = parseRoute();
+      });
       tagsBox.appendChild(det);
     }
     box.appendChild(panel(t('container.tags') + ' · ' + c.tags.length, tagsBox, S.cap ? h('span', { class: 'meta ml-auto', text: sampleNote(ids) }) : null));
@@ -7388,7 +7405,7 @@ VIEWS.features = {
       body.appendChild(h('p', { class: 'callout__title', text: t('ft.where') }));
       body.appendChild(h('p', null, tn('ft.env', { vars: code(t('ft.' + ft.key + '.env')) })));
     } else if (ft.go) {
-      const go = h('a', { class: 'button', 'data-variant': 'primary', href: '#' + ft.go }, t('ft.go.' + ft.go));
+      const go = h('a', { class: 'button', 'data-variant': 'primary', href: hashFor([ft.go], scopeQuery()) }, t('ft.go.' + ft.go));
       go.addEventListener('click', () => form.closest('dialog').close());
       actions.appendChild(go);
     }
@@ -7614,6 +7631,7 @@ VIEWS.integrations = {
       save.disabled = true; save.setAttribute('aria-busy', 'true');
       try {
         S.integrations = await api('PUT', '/admin/api/enrichment', { enabled: en.sw.getAttribute('aria-checked') === 'true', url: url.value.trim(), key: key.value, header_name: hn.value.trim(), header_value: hv.value.trim(), event_user_data: eud.sw.getAttribute('aria-checked') === 'true' });
+        S.containers.clear();
         toast('ok', t('enr.saved'));
         this.render();
       } catch (err) {

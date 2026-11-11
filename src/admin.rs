@@ -994,7 +994,7 @@ async fn explain_alert(a: &Admin, ai: &Ai, alert: &Value) -> Option<Value> {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .any(|x| x["tag"] == subject && x["outcome"] != "success"),
+                .any(|x| x["tag"] == subject && checkup::failed_run(x)),
             "unclaimed" => r["claimed_by"].is_null(),
             _ => r["events"].as_array().into_iter().flatten().any(|e| {
                 e["event_name"]

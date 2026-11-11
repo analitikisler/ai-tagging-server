@@ -53,12 +53,27 @@ fn truthy(v: &Value) -> bool {
 fn in_test_mode(tag: &Value) -> bool {
     let d = &tag["data"];
     match tag["template"].as_str().unwrap_or_default() {
-        "meta_capi" | "tiktok_events" => {
+        "meta_capi" | "tiktok_events" | "reddit_capi" => {
             d["test_event_code"].as_str().is_some_and(|s| !s.is_empty())
         }
-        "pinterest_capi" | "google_ads" => truthy(&d["test_mode"]),
+        "pinterest_capi" | "google_ads" | "snapchat_capi" => truthy(&d["test_mode"]),
         _ => false,
     }
+}
+
+/// Whether a tag run in a trace failed, threw or timed out. A run that
+/// skipped its event (no consent, an event the platform doesn't use) did
+/// what it should.
+pub fn failed_run(run: &Value) -> bool {
+    !matches!(run["outcome"].as_str(), Some("success" | "skipped"))
+}
+
+/// Whether a template is an ad platform's tag. The Integrations page also
+/// sets up the BigQuery export and the Shopify client, which are not.
+fn is_ad_template(template: &Value) -> bool {
+    PROVIDERS
+        .iter()
+        .any(|p| *template == p.template && !p.client && p.id != "bigquery")
 }
 
 /// The platform a browser pixel would duplicate, for a tag template.
@@ -159,7 +174,7 @@ pub fn check(
                     let failed = h["result"]["tags"]
                         .as_array()?
                         .iter()
-                        .any(|x| x["tag"] == name && x["outcome"] != "success");
+                        .any(|x| x["tag"] == name && failed_run(x));
                     if !failed {
                         return None;
                     }
@@ -187,7 +202,7 @@ pub fn check(
     }
     let ad_tags: Vec<&&Value> = enabled
         .iter()
-        .filter(|t| PROVIDERS.iter().any(|p| t["template"] == p.template))
+        .filter(|t| is_ad_template(&t["template"]))
         .collect();
     if ad_tags.is_empty() {
         out.push(item("no_ad_platforms", "info", "server", json!({})));
@@ -537,14 +552,21 @@ async fn fetch(client: &(reqwest::Client, bool), url: &str) -> Result<String, St
     if !allow_private && private_literal(&parsed) {
         return Err("destination is private or internal".into());
     }
-    let r = client.get(parsed).send().await.map_err(|e| e.to_string())?;
+    let mut r = client.get(parsed).send().await.map_err(|e| e.to_string())?;
     let status = r.status();
-    let bytes = r.bytes().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
         return Err(format!("HTTP {}", status.as_u16()));
     }
-    let cut = &bytes[..bytes.len().min(MAX_FETCH)];
-    Ok(String::from_utf8_lossy(cut).into_owned())
+    // Stop reading at the limit, so a huge answer is never held whole.
+    let mut bytes = Vec::new();
+    while bytes.len() < MAX_FETCH {
+        match r.chunk().await.map_err(|e| e.to_string())? {
+            Some(chunk) => bytes.extend_from_slice(&chunk),
+            None => break,
+        }
+    }
+    bytes.truncate(MAX_FETCH);
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// A client for the site and GTM: public addresses only (each redirect is
@@ -564,7 +586,10 @@ pub fn client(allow_private: bool) -> (reqwest::Client, bool) {
         .redirect(policy)
         .user_agent("Mozilla/5.0 (compatible; AI-Tagging-Server setup check)");
     if !allow_private {
-        b = b.dns_resolver(std::sync::Arc::new(crate::server::PublicOnlyResolver));
+        // A proxy would resolve names itself, past the resolver's check.
+        b = b
+            .no_proxy()
+            .dns_resolver(std::sync::Arc::new(crate::server::PublicOnlyResolver));
     }
     (b.build().expect("http client"), allow_private)
 }
@@ -659,7 +684,7 @@ fn verdict(session: &[(u64, &Value)], container: &Value, pixels: &BTreeSet<Strin
         .flatten()
         .filter(|t| t["enabled"] != json!(false))
         .collect();
-    let is_ad = |t: &Value| PROVIDERS.iter().any(|p| t["template"] == p.template);
+    let is_ad = |t: &Value| is_ad_template(&t["template"]);
     let mut conversions: BTreeSet<String> = tags
         .iter()
         .filter(|t| is_ad(t))
@@ -750,7 +775,7 @@ fn verdict(session: &[(u64, &Value)], container: &Value, pixels: &BTreeSet<Strin
         let mut fails: Vec<&str> = Vec::new();
         match run {
             None => fails.push("not_run"),
-            Some(x) if x["outcome"] != "success" => fails.push("failed"),
+            Some(x) if failed_run(x) => fails.push("failed"),
             _ if sends.is_empty() => fails.push("not_sent"),
             _ if refused => fails.push("refused"),
             _ => {}

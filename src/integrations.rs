@@ -347,7 +347,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         id: "shopify",
         name: "Shopify orders",
         template: "shopify_client",
-        help: "Sends every paid Shopify order to the tags above as a purchase, from the server. In Shopify: Settings > Notifications > Webhooks > Create webhook, event \"Order payment\", format JSON, URL https://<your site>/metrics/shopify/orders.",
+        help: "Sends every paid Shopify order to the tags above as a purchase, from the server. In Shopify: Settings > Notifications > Webhooks > Create webhook, event \"Order payment\", format JSON, URL https://<your site>/<your path>/shopify/orders.",
         fields: &[
             FieldDef {
                 key: "webhook_secret",
@@ -841,11 +841,13 @@ impl Integrations {
     }
 
     fn read_file(&self) -> Result<(Config, Option<SystemTime>), String> {
-        let text = std::fs::read_to_string(&self.path)
-            .map_err(|e| format!("{}: {e}", self.path.display()))?;
+        // The time first: a write between the two reads then shows as a
+        // change on the next look, instead of being missed.
         let modified = std::fs::metadata(&self.path)
             .and_then(|m| m.modified())
             .ok();
+        let text = std::fs::read_to_string(&self.path)
+            .map_err(|e| format!("{}: {e}", self.path.display()))?;
         let mut config: Config =
             serde_json::from_str(&text).map_err(|e| format!("{}: {e}", self.path.display()))?;
         config.validate()?;
@@ -1023,6 +1025,9 @@ impl Integrations {
     ) -> Result<(), String> {
         let def = provider(id).ok_or("no such provider")?;
         let _w = self.write.lock().expect("write");
+        // Pick up a save from another instance, or a hand edit, before
+        // changing the file, so this save doesn't undo it.
+        self.reload_if_changed();
         let mut config = self.state.read().expect("integrations").config.clone();
         let old = config.providers.remove(id).unwrap_or_default();
         let mut next = ProviderConfig {
@@ -1051,6 +1056,7 @@ impl Integrations {
     /// stored one, unless the header name is cleared too.
     pub fn set_enrichment(&self, mut e: Enrichment) -> Result<(), String> {
         let _w = self.write.lock().expect("write");
+        self.reload_if_changed();
         let mut config = self.state.read().expect("integrations").config.clone();
         if e.header_value.trim().is_empty() && !e.header_name.trim().is_empty() {
             e.header_value = config.enrichment.header_value.clone();

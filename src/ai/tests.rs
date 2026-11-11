@@ -466,7 +466,9 @@ fn the_ai_never_gets_the_visitors_ip() {
             "remote_address": "203.0.113.9:5555",
         },
         "result": {
-            "events": [{ "event_name": "page_view", "ip_override": "203.0.113.9", "nested": { "client_ip": "203.0.113.9" } }],
+            "events": [{ "event_name": "page_view", "ip_override": "203.0.113.9", "nested": { "client_ip": "203.0.113.9" },
+                         "x-sst-raw-hit": "v=2&_uip=203.0.113.9&en=page_view" }],
+            "sends": [{ "from": "GA4", "url": "https://www.google-analytics.com/g/collect?v=2&en=page_view&_uip=203.0.113.9&_ua=UA", "result": { "Ok": 204 } }],
             "logs": (0..150).map(|i| json!(format!("line {i}"))).collect::<Vec<_>>(),
         }
     });
@@ -484,6 +486,14 @@ fn the_ai_never_gets_the_visitors_ip() {
     assert_eq!(t["request"]["body"].as_str().unwrap().len(), 8 * 1024);
     assert_eq!(t["request"]["body_truncated"], true);
     assert_eq!(t["result"]["events"][0]["ip_override"], "[removed]");
+    assert_eq!(
+        t["result"]["events"][0]["x-sst-raw-hit"],
+        "v=2&en=page_view"
+    );
+    assert_eq!(
+        t["result"]["sends"][0]["url"],
+        "https://www.google-analytics.com/g/collect?v=2&en=page_view&_ua=UA"
+    );
     assert_eq!(t["result"]["logs"].as_array().unwrap().len(), 100);
     assert_eq!(t["result"]["logs"][0], "line 50");
 }

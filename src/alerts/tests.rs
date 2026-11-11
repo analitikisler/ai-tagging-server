@@ -86,6 +86,7 @@ fn failing_vendors_and_tags_are_found_even_while_learning() {
         Runs {
             runs: 30,
             failed: 18,
+            skipped: 0,
         },
     );
     let f = evaluate("shop", &now, &[], &Config::default());
@@ -277,6 +278,7 @@ async fn the_ai_explains_new_alerts_and_another_check_waits_for_the_lock() {
         Runs {
             runs: 30,
             failed: 30,
+            skipped: 0,
         },
     );
     put(&state, q - 1, c);

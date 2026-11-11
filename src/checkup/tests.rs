@@ -101,6 +101,7 @@ fn tags_are_checked_for_settings_failures_and_idleness() {
         Runs {
             runs: 100,
             failed: 0,
+            skipped: 0,
         },
     );
     c.tags.insert(
@@ -108,6 +109,7 @@ fn tags_are_checked_for_settings_failures_and_idleness() {
         Runs {
             runs: 10,
             failed: 5,
+            skipped: 0,
         },
     );
     let failing_hit = json!({ "result": {

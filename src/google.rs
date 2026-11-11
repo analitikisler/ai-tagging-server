@@ -130,10 +130,20 @@ impl GoogleAuth {
         {
             return Ok(token.clone());
         }
-        let fetched = self
-            .fetch()
-            .await
-            .map_err(|e| format!("google auth: {e}"))?;
+        let fetched = match self.fetch().await {
+            Ok(f) => f,
+            Err(e) => {
+                // The last token still works until it expires, so a failed
+                // early refresh doesn't fail the insert.
+                if let Some((token, expires)) = cached.as_ref()
+                    && Instant::now() < *expires
+                {
+                    tracing::warn!("google auth: {e}; using the token that is still valid");
+                    return Ok(token.clone());
+                }
+                return Err(format!("google auth: {e}"));
+            }
+        };
         let expires = Instant::now() + Duration::from_secs(fetched.expires_in);
         *cached = Some((fetched.access_token.clone(), expires));
         Ok(fetched.access_token)

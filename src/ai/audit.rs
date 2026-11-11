@@ -176,11 +176,14 @@ pub fn count(traces: &[(u64, Value)], container: &Value, retries: u64) -> Counts
             if c.samples.len() < SAMPLES && !c.samples.contains(id) {
                 c.samples.push(*id);
             }
-            *runs_here
-                .entry(tag.clone())
-                .or_default()
-                .entry(event)
-                .or_default() += 1;
+            // A run that skipped its event sent nothing, so no send is its.
+            if outcome != "skipped" {
+                *runs_here
+                    .entry(tag.clone())
+                    .or_default()
+                    .entry(event)
+                    .or_default() += 1;
+            }
             if let Some(e) = error {
                 let e: String = e.chars().take(200).collect();
                 errors.entry((tag, e)).or_default().add(*id);

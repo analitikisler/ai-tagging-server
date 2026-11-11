@@ -135,7 +135,7 @@ impl Traces {
                     ("events".into(), json!([])),
                     (
                         "tags".into(),
-                        json!({"success": 0, "failure": 0, "timeout": 0, "exception": 0}),
+                        json!({"success": 0, "failure": 0, "timeout": 0, "exception": 0, "skipped": 0}),
                     ),
                     ("tag_runs".into(), json!([])),
                     ("sends".into(), json!({"ok": 0, "failed": 0})),
@@ -155,6 +155,8 @@ impl Traces {
                 search.extend(r.claimed_by.iter().cloned());
                 search.extend(r.client_error.iter().cloned());
                 let (mut success, mut failure, mut timeout, mut exception) = (0, 0, 0, 0);
+                // Tags that chose not to send: neither a success nor an error.
+                let mut skipped = 0;
                 let mut runs = Vec::with_capacity(r.tags.len());
                 for t in &r.tags {
                     // A tag that threw keeps the error; one that failed on its own has none.
@@ -166,6 +168,7 @@ impl Traces {
                         "success" => success += 1,
                         "failure" => failure += 1,
                         "exception" => exception += 1,
+                        "skipped" => skipped += 1,
                         _ => timeout += 1,
                     }
                     runs.push(json!({"tag": t.tag, "event": t.event, "outcome": outcome}));
@@ -183,7 +186,7 @@ impl Traces {
                 }
                 let failed = r.sends.len() - ok;
                 let has_error = r.client_error.is_some()
-                    || success != r.tags.len()
+                    || success + skipped != r.tags.len()
                     || failed > 0
                     || r.response.status >= 500;
                 summary.extend([
@@ -194,7 +197,7 @@ impl Traces {
                     ("events".into(), json!(names)),
                     (
                         "tags".into(),
-                        json!({"success": success, "failure": failure, "timeout": timeout, "exception": exception}),
+                        json!({"success": success, "failure": failure, "timeout": timeout, "exception": exception, "skipped": skipped}),
                     ),
                     ("tag_runs".into(), Value::Array(runs)),
                     ("sends".into(), json!({"ok": ok, "failed": failed})),
@@ -361,8 +364,9 @@ const AI_LOGS: usize = 100;
 const AI_LOG_LINE: usize = 500;
 
 /// A trace as the AI is given it: on top of what every trace already hides,
-/// the visitor's IP address is removed from the headers, the event data and
-/// the query, the body is cut to 8 KB and the logs to the last 100 lines.
+/// the visitor's IP address is removed from the headers, the event data,
+/// the query and the sends' addresses, the body is cut to 8 KB and the logs
+/// to the last 100 lines.
 pub fn for_ai(detail: &Value) -> Value {
     let mut t = detail.clone();
     let req = &mut t["request"];
@@ -407,6 +411,20 @@ pub fn for_ai(detail: &Value) -> Value {
     }
     if let Some(events) = t["result"].get_mut("events") {
         drop_keys(events, IP_KEYS);
+        // The hit as the browser sent it rides along with each event.
+        for e in events.as_array_mut().into_iter().flatten() {
+            if let Some(Value::String(raw)) = e.get_mut(crate::mpv2::RAW_HIT_KEY) {
+                *raw = drop_params(raw, IP_KEYS);
+            }
+        }
+    }
+    // The GA4 tag forwards the visitor's IP to Google as `_uip`.
+    for s in t["result"]["sends"].as_array_mut().into_iter().flatten() {
+        if let Some(Value::String(url)) = s.get_mut("url")
+            && let Some((base, query)) = url.split_once('?')
+        {
+            *url = format!("{base}?{}", drop_params(query, IP_KEYS));
+        }
     }
     t
 }
@@ -559,10 +577,32 @@ pub fn mask_result(result: &mut Value) {
             if let Some(Value::String(url)) = s.get_mut("url")
                 && let Some((base, query)) = url.split_once('?')
             {
-                *url = format!("{base}?{}", mask_params(query));
+                *url = format!("{base}?{}", hide_secret_params(&mask_params(query)));
             }
         }
     }
+}
+
+/// Hides the value of a send's query parameter whose name says it holds a
+/// secret (Snapchat's `access_token`, an API `key`), so no trace, debug
+/// report or AI prompt carries it. The hit's own event and user parameters
+/// are left as sent.
+fn hide_secret_params(query: &str) -> String {
+    query
+        .split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((k, _))
+                if !["ep.", "epn.", "up.", "upn."]
+                    .iter()
+                    .any(|p| k.starts_with(p))
+                    && (k == "key" || crate::admin::secret_name(k)) =>
+            {
+                format!("{k}=[redacted]")
+            }
+            _ => pair.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// `_ga=GA1.1.1; _fbp=fb.1.2` becomes `_ga, _fbp`.
@@ -718,9 +758,33 @@ mod tests {
         let s = &all[1];
         assert_eq!(
             s["tags"],
-            json!({"success": 1, "failure": 1, "timeout": 0, "exception": 1})
+            json!({"success": 1, "failure": 1, "timeout": 0, "exception": 1, "skipped": 0})
         );
         assert_eq!(s["tag_runs"][2]["outcome"], "exception");
+
+        // A tag that skipped its event (no consent) is neither a success nor
+        // an error.
+        let skipped = RunResult {
+            claimed_by: Some("GA4".into()),
+            events: vec![json!({"event_name": "page_view"})],
+            tags: vec![
+                tag("GA4", "success", None),
+                tag("TikTok Events API", "skipped", None),
+            ],
+            ..Default::default()
+        };
+        t.record(
+            None,
+            hit("/g/collect"),
+            Duration::ZERO,
+            Outcome::Ran(&skipped),
+        );
+        let (newest, _) = t.list(&Filter::default());
+        assert_eq!(
+            newest[0]["tags"],
+            json!({"success": 1, "failure": 0, "timeout": 0, "exception": 0, "skipped": 1})
+        );
+        assert_eq!(newest[0]["has_error"], false);
         assert_eq!(s["sends"], json!({"ok": 0, "failed": 1}));
         assert_eq!(s["events"], json!(["purchase"]));
         assert_eq!(s["has_error"], true);
