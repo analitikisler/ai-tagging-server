@@ -51,7 +51,14 @@ impl State {
     }
 
     pub fn memory() -> Self {
-        let seed = format!("{}-{}", std::process::id(), now_ms());
+        // Random, not only the process id and the time: instances are all
+        // PID 1 in their containers and can start in the same millisecond.
+        let seed = format!(
+            "{}-{}-{:016x}",
+            std::process::id(),
+            now_ms(),
+            crate::store::unique()
+        );
         let id: String = Sha256::digest(seed.as_bytes())[..6]
             .iter()
             .map(|b| format!("{b:02x}"))

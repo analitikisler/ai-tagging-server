@@ -23,7 +23,7 @@ if (
 }
 
 const eventName = getEventData('event_name');
-const xEvent = eventMap(data.event_ids)[eventName];
+const xEvent = mapped(eventMap(data.event_ids), eventName);
 if (!xEvent) {
   skip('unmapped_event');
   return;

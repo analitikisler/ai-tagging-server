@@ -44,6 +44,16 @@ const clean = (obj) => {
 };
 const listOf = (v) => (v === undefined ? undefined : [v]);
 
+// A switch set from the Integrations page ("true") or a container file (true).
+const isOn = (v) => v === true || v === 'true';
+
+// The platform's name for a GA4 event in `map`, or undefined. Only a name the
+// map itself holds counts: an event called "constructor" has none.
+const mapped = (map, name) => {
+  const v = typeof name === 'string' ? map[name] : undefined;
+  return typeof v === 'string' ? v : undefined;
+};
+
 // A setting that pairs GA4 event names with the platform's own ids, such as
 // "purchase=123, generate_lead=456", as an object.
 const eventMap = (text) => {
@@ -96,7 +106,7 @@ const adConsentBlock = () => {
   for (let i = 0; i < needed.length; i++) {
     const v = state[needed[i]];
     if (v === 'denied') return 'consent:' + needed[i] + '=denied';
-    if (v === undefined && data.send_without_consent !== 'true') return 'consent:' + needed[i] + '=missing';
+    if (v === undefined && !isOn(data.send_without_consent)) return 'consent:' + needed[i] + '=missing';
   }
   return undefined;
 };

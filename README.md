@@ -331,7 +331,7 @@ A container's `transformations` change event data on the server before tags see 
 | `{ "op": "set", "key", "value", "only_if_missing" }` | Sets a key to any JSON value; with `only_if_missing`, only when it has none. |
 | `{ "op": "copy", "from", "to" }` | Copies a value to another key. |
 | `{ "op": "map", "key", "to", "table", "default", "ignore_case" }` | Looks the value up in `table` by its string form and writes the result to `to` (or back to `key`). No match keeps the value, or writes `default` when set. |
-| `{ "op": "format", "key", "format" }` | `lower`, `upper`, `trim`, `number` (from `"49,90"` or `"1,234.50"`; anything else is left as it was) or `string`. |
+| `{ "op": "format", "key", "format" }` | `lower`, `upper`, `trim`, `number` (from `"49,90"`, `"1,234.50"` or `"1.234,50"`; anything else is left as it was) or `string`. |
 | `{ "op": "remove", "keys" }` | Takes the keys out. |
 | `{ "op": "keep", "keys" }` | Keeps only these keys and `event_name`. |
 
@@ -353,7 +353,7 @@ Permissions, with the APIs they cover. Parameters are checked on every call, and
 
 | Permission | Parameters | APIs |
 | --- | --- | --- |
-| `send_http` | `urls`: patterns, `*` matches anything | `sendHttpRequest`, `sendHttpGet` |
+| `send_http` | `urls`: patterns, `*` matches anything; in the host it stays in the host, so `https://*.example.com/*` covers subdomains and nothing else | `sendHttpRequest`, `sendHttpGet` |
 | `read_event_data` | `keys`: patterns; `getAllEventData` needs `["*"]` | `getEventData`, `getAllEventData` |
 | `get_cookies` | `names`: patterns | `getCookieValues` |
 | `set_cookies` | `names`: patterns | `setCookie` |

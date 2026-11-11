@@ -14,7 +14,7 @@ if (!data.access_token || !data.conversions) {
 }
 
 const eventName = getEventData('event_name');
-const rule = eventMap(data.conversions)[eventName];
+const rule = mapped(eventMap(data.conversions), eventName);
 if (!rule) {
   skip('unmapped_event');
   return;

@@ -149,7 +149,10 @@
         if (i < 0) return;
         if (part.slice(0, i).trim() !== name) return;
         const raw = part.slice(i + 1).trim();
-        out.push(noDecode ? raw : (decode(raw) === undefined ? raw : decode(raw)));
+        // Percent-decoding only: a `+` in a cookie is a plus, not a space.
+        let value = raw;
+        if (!noDecode) { try { value = decodeURIComponent(raw); } catch (e) { value = raw; } }
+        out.push(value);
       });
     });
     return out;
@@ -316,8 +319,11 @@
       return r === '\u0000invalid' ? undefined : r;
     },
     sha256Sync: (input, options) => host.sha256(String(input), (options && options.outputEncoding) || 'base64'),
-    sha256: (input, onSuccess, options) => {
-      const out = host.sha256(String(input), (options && options.outputEncoding) || 'base64');
+    // sGTM's form is (input, onSuccess, onFailure, options); the options
+    // are also taken as the third argument, which this server accepted first.
+    sha256: (input, onSuccess, onFailure, options) => {
+      const o = options || (onFailure !== null && typeof onFailure === 'object' ? onFailure : undefined);
+      const out = host.sha256(String(input), (o && o.outputEncoding) || 'base64');
       Promise.resolve().then(() => onSuccess(out));
     },
 
@@ -410,51 +416,130 @@
   // --- Template permissions -------------------------------------------------
   // `grants` maps permission ids to their parameters; null means a trusted
   // built-in template, which may use every API.
+  //
+  // The template runs in this context too and can change the built-in
+  // prototypes (`[].__proto__.some = () => true`). So the checks use nothing
+  // it can reach: own properties only, loops rather than array methods, a
+  // matcher written out by hand, and functions captured here, before the
+  // template runs. What a check reads is read once and handed on, so the
+  // value checked is the value the API gets.
   const grants = JSON.parse(grantsJson);
   const apiPerms = JSON.parse(apiPermsJson);
+  const hasOwn = Function.prototype.call.bind(Object.prototype.hasOwnProperty);
+  const callFn = Reflect.apply;
+  const freeze = Object.freeze;
+  const str = String;
+  const own = (o, k) => (o !== null && typeof o === 'object' && hasOwn(o, k) ? o[k] : undefined);
 
-  const globMatch = (pattern, s) =>
-    new RegExp('^' + String(pattern).replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$').test(s);
-  const anyMatch = (list, s) => list.some((p) => globMatch(p, s));
+  // Whether `s` matches `pattern`, where `*` stands for any run of characters.
+  const glob = (pattern, s) => {
+    let p = 0, i = 0, star = -1, mark = 0;
+    while (i < s.length) {
+      if (p < pattern.length && pattern[p] === '*') { star = p; mark = i; p += 1; }
+      else if (p < pattern.length && pattern[p] === s[i]) { p += 1; i += 1; }
+      else if (star >= 0) { p = star + 1; mark += 1; i = mark; }
+      else return false;
+    }
+    while (p < pattern.length && pattern[p] === '*') p += 1;
+    return p === pattern.length;
+  };
+  // A URL as [scheme and host, the rest], or null without a scheme.
+  const cutUrl = (u) => {
+    let at = -1;
+    for (let i = 0; i + 2 < u.length; i += 1) {
+      if (u[i] === ':' && u[i + 1] === '/' && u[i + 2] === '/') { at = i + 3; break; }
+    }
+    if (at < 0) return null;
+    let end = at;
+    while (end < u.length && u[end] !== '/' && u[end] !== '?' && u[end] !== '#' && u[end] !== '\\') end += 1;
+    let host = '', rest = '';
+    for (let i = 0; i < u.length; i += 1) { if (i < end) host += u[i]; else rest += u[i]; }
+    return [host, rest];
+  };
+  // A URL pattern is matched in two parts, so a `*` in its host never
+  // reaches into the path: `https://*.example.com/*` is not matched by
+  // `https://evil.test/a.example.com/x`. A host with user info or blanks,
+  // which a URL parser reads differently from how it looks, never matches.
+  const urlMatch = (pattern, url) => {
+    if (pattern === '*') return true;
+    const p = cutUrl(pattern);
+    if (!p) return glob(pattern, url);
+    const u = cutUrl(url);
+    if (!u) return false;
+    for (let i = 0; i < u[0].length; i += 1) {
+      if (u[0][i] === '@' || u[0][i] <= ' ') return false;
+    }
+    if (!glob(p[0], u[0])) return false;
+    if (p[1] === '') return true;
+    return glob(p[1], u[1] !== '' && u[1][0] === '/' ? u[1] : '/' + u[1]);
+  };
+  const anyMatch = (list, s, match) => {
+    if (!list) return false;
+    for (let i = 0; i < list.length; i += 1) {
+      if (hasOwn(list, i) && match(str(list[i]), s)) return true;
+    }
+    return false;
+  };
 
-  // Per-call checks for permissions that limit what an API may touch.
+  // Per-call checks for permissions that limit what an API may touch, by the
+  // API's first argument as a string.
   const argChecks = {
-    sendHttpRequest: (g, a) => anyMatch(g.urls, String(a[0])),
-    sendHttpGet: (g, a) => anyMatch(g.urls, String(a[0])),
-    getEventData: (g, a) => anyMatch(g.keys, String(a[0])),
-    getAllEventData: (g) => g.keys.indexOf('*') >= 0,
-    getCookieValues: (g, a) => anyMatch(g.names, String(a[0])),
-    setCookie: (g, a) => anyMatch(g.names, String(a[0])),
+    __proto__: null,
+    sendHttpRequest: (g, first) => anyMatch(own(g, 'urls'), first, urlMatch),
+    sendHttpGet: (g, first) => anyMatch(own(g, 'urls'), first, urlMatch),
+    getEventData: (g, first) => anyMatch(own(g, 'keys'), first, glob),
+    getAllEventData: (g) => anyMatch(own(g, 'keys'), '*', (p, s) => p === s),
+    getCookieValues: (g, first) => anyMatch(own(g, 'names'), first, glob),
+    setCookie: (g, first) => anyMatch(own(g, 'names'), first, glob),
   };
 
   const require = (name) => {
-    const key = String(name);
-    if (key.slice(0, 2) === '__' || !Object.prototype.hasOwnProperty.call(apis, key)) {
+    const key = str(name);
+    if ((key[0] === '_' && key[1] === '_') || !hasOwn(apis, key)) {
       throw new Error('require("' + key + '") is not a permitted API');
     }
-    const perm = apiPerms[key];
-    if (!grants || !perm) return apis[key];
-    const g = grants[perm];
+    const api = apis[key];
+    const perm = own(apiPerms, key);
+    if (!grants || !perm) return api;
+    const g = own(grants, perm);
     if (!g) throw new Error(key + ' needs the "' + perm + '" permission');
     if (key === 'BigQuery') {
-      return Object.freeze({
-        insert: Object.freeze(function (connectionInfo) {
+      const insert = api.insert;
+      return freeze({
+        insert: freeze(function (connectionInfo, rows, options) {
           const c = connectionInfo || {};
-          const table = [c.projectId, c.datasetId, c.tableId].map((v) => String(v || '')).join('.');
-          if (!anyMatch(g.tables, table)) {
+          const info = {
+            projectId: str(c.projectId || ''),
+            datasetId: str(c.datasetId || ''),
+            tableId: str(c.tableId || ''),
+          };
+          const table = info.projectId + '.' + info.datasetId + '.' + info.tableId;
+          if (!anyMatch(own(g, 'tables'), table, glob)) {
             throw new Error('BigQuery.insert is not allowed for ' + table + ' by the "' + perm + '" permission');
           }
-          return apis.BigQuery.insert.apply(undefined, arguments);
+          return insert(info, rows, options);
         }),
       });
     }
     const check = argChecks[key];
-    if (!check) return apis[key];
-    return Object.freeze(function () {
-      if (!check(g, arguments)) {
-        throw new Error(key + ' is not allowed for ' + (arguments.length ? String(arguments[0]) : 'all data') + ' by the "' + perm + '" permission');
+    if (!check) return api;
+    if (key === 'getAllEventData') {
+      return freeze(function () {
+        if (!check(g)) throw new Error(key + ' is not allowed for all data by the "' + perm + '" permission');
+        return api();
+      });
+    }
+    return freeze(function () {
+      const n = arguments.length;
+      const first = str(arguments[0]);
+      if (!check(g, first)) {
+        throw new Error(key + ' is not allowed for ' + first + ' by the "' + perm + '" permission');
       }
-      return apis[key].apply(undefined, arguments);
+      const args = n <= 1 ? [first]
+        : n === 2 ? [first, arguments[1]]
+        : n === 3 ? [first, arguments[1], arguments[2]]
+        : [first, arguments[1], arguments[2], arguments[3]];
+      return callFn(api, undefined, args);
     });
   };
 

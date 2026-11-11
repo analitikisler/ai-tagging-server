@@ -54,7 +54,7 @@ const iso = (ms) => {
 // tag's send_without_consent setting on).
 const consent = consentState();
 const storage = consent.ad_storage;
-if (storage === 'denied' || (storage === undefined && data.send_without_consent !== 'true')) {
+if (storage === 'denied' || (storage === undefined && !isOn(data.send_without_consent))) {
   skip('consent:ad_storage=' + (storage || 'missing'));
   return;
 }
@@ -196,10 +196,14 @@ fetchExtra((x) => {
   const payload = {
     destinations: [destination],
     encoding: 'HEX',
-    consent: { adUserData: 'CONSENT_GRANTED', adPersonalization: 'CONSENT_GRANTED' },
+    // A visitor who turned ad personalisation down is reported as such.
+    consent: {
+      adUserData: 'CONSENT_GRANTED',
+      adPersonalization: consent.ad_personalization === 'denied' ? 'CONSENT_DENIED' : 'CONSENT_GRANTED',
+    },
     events: [event],
   };
-  if (data.test_mode === true || data.test_mode === 'true') payload.validateOnly = true;
+  if (isOn(data.test_mode)) payload.validateOnly = true;
   withToken((token) => {
     sendHttpRequest('https://datamanager.googleapis.com/v1/events:ingest', {
       method: 'POST',

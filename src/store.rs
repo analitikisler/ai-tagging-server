@@ -36,7 +36,7 @@ fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
 }
 
 /// Random per process, different on every call.
-fn unique() -> u64 {
+pub(crate) fn unique() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let mut h = RandomState::new().build_hasher();
     h.write_u64(NEXT.fetch_add(1, Relaxed));

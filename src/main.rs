@@ -58,11 +58,15 @@ async fn main() {
         .unwrap_or(1);
     // A worker waits for its hit's outgoing sends, so most of its time is
     // spent idle on the network rather than on the CPU.
-    let workers: usize = env("WORKERS", cpus * 8);
+    let workers: usize = env("WORKERS", cpus * 8).max(1);
     let budget = Duration::from_millis(env("RUN_TIMEOUT_MS", 5000u64).min(30_000));
     let memory = env("JS_MEMORY_MB", 64usize).clamp(4, 512) * 1024 * 1024;
     let allow_private = env("OUTGOING_ALLOW_PRIVATE", 0u8) == 1;
-    let debug_token = secret_env("DEBUG_TOKEN").filter(|t| t.len() >= 16);
+    let debug_token = secret_env("DEBUG_TOKEN");
+    if debug_token.as_ref().is_some_and(|t| t.len() < 16) {
+        tracing::warn!("DEBUG_TOKEN is shorter than 16 characters and is ignored");
+    }
+    let debug_token = debug_token.filter(|t| t.len() >= 16);
     let proxy_secret = secret_env("PROXY_SECRET");
     if proxy_secret.as_ref().is_some_and(|s| s.len() < 16) {
         eprintln!("PROXY_SECRET must be at least 16 characters");
@@ -273,6 +277,9 @@ async fn main() {
     if slack.as_ref().is_some_and(|u| !u.starts_with("https://")) {
         eprintln!("SLACK_WEBHOOK_URL must be an https:// address");
         std::process::exit(1);
+    }
+    if slack.is_some() && admin_token.is_none() {
+        tracing::warn!("SLACK_WEBHOOK_URL is set but ADMIN_TOKEN isn't; no alert checks run");
     }
     let check_token = secret_env("CHECK_TOKEN");
     if check_token.as_ref().is_some_and(|t| t.len() < 16) {

@@ -18,7 +18,7 @@ if (missing(['ad_account_id', 'access_token'])) {
 }
 
 const eventName = getEventData('event_name');
-const pinName = NAMES[eventName];
+const pinName = mapped(NAMES, eventName);
 if (!pinName) {
   skip('unmapped_event');
   return;
@@ -79,7 +79,7 @@ fetchExtra((x) => {
   };
   const url =
     'https://api.pinterest.com/v5/ad_accounts/' + encodeUriComponent(data.ad_account_id) + '/events' +
-    (data.test_mode === 'true' ? '?test=true' : '');
+    (isOn(data.test_mode) ? '?test=true' : '');
   sendHttpRequest(
     url,
     { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + data.access_token } },

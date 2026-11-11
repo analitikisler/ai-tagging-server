@@ -25,7 +25,7 @@ if (!data.pixel_id || !data.access_token) {
 }
 
 const eventName = getEventData('event_name');
-const redditName = NAMES[eventName];
+const redditName = mapped(NAMES, eventName);
 if (!redditName) {
   skip('unmapped_event');
   return;
