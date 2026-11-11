@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use crate::ai::setup::needs;
 use crate::counts::Counts;
 use crate::integrations::PROVIDERS;
+use crate::sandbox::RunKind;
 
 /// Most bytes read from a page or a GTM container.
 const MAX_FETCH: usize = 5 * 1024 * 1024;
@@ -65,7 +66,8 @@ fn in_test_mode(tag: &Value) -> bool {
 /// skipped its event (no consent, an event the platform doesn't use) did
 /// what it should.
 pub fn failed_run(run: &Value) -> bool {
-    !matches!(run["outcome"].as_str(), Some("success" | "skipped"))
+    // A run whose ending can't be read is not known to have gone well.
+    RunKind::of_trace(run).is_none_or(RunKind::went_wrong)
 }
 
 /// Whether a template is an ad platform's tag. The Integrations page also

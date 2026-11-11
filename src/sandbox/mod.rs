@@ -99,15 +99,146 @@ pub struct RunResult {
     pub triggers: Vec<Trigger>,
 }
 
+/// How a tag's run ended. Every place that counts or shows runs matches on
+/// this, so an ending added here can't be left out of one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TagOutcome {
+    /// The tag called `gtmOnSuccess`.
+    Success,
+    /// It called `gtmOnFailure`, or threw; then the run has an `error`.
+    Failure,
+    /// It called `gtmOnSkipped`: it chose not to send, and `skip` says why.
+    Skipped,
+    /// It reported nothing before the run ended.
+    Timeout,
+}
+
+impl TagOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TagOutcome::Success => "success",
+            TagOutcome::Failure => "failure",
+            TagOutcome::Skipped => "skipped",
+            TagOutcome::Timeout => "timeout",
+        }
+    }
+
+    /// Whether the run went wrong. One that skipped its event (no consent,
+    /// an event the platform doesn't use) did what it should.
+    pub fn went_wrong(self) -> bool {
+        match self {
+            TagOutcome::Success | TagOutcome::Skipped => false,
+            TagOutcome::Failure | TagOutcome::Timeout => true,
+        }
+    }
+
+    /// From what a tag reported: `done` is true for `gtmOnSuccess`, false
+    /// for `gtmOnFailure` and None when it reported nothing; `skipped`
+    /// whether it called `gtmOnSkipped`.
+    fn reported(done: Option<bool>, skipped: bool) -> Self {
+        match done {
+            Some(true) if skipped => TagOutcome::Skipped,
+            Some(true) => TagOutcome::Success,
+            Some(false) => TagOutcome::Failure,
+            None => TagOutcome::Timeout,
+        }
+    }
+}
+
+impl std::fmt::Display for TagOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A run as people are shown it: a failure that threw is told apart from
+/// one the tag reported itself. Traces keep these words, and whatever reads
+/// a trace reads them back with `parse`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunKind {
+    Success,
+    Failure,
+    Exception,
+    Skipped,
+    Timeout,
+}
+
+impl RunKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunKind::Success => "success",
+            RunKind::Failure => "failure",
+            RunKind::Exception => "exception",
+            RunKind::Skipped => "skipped",
+            RunKind::Timeout => "timeout",
+        }
+    }
+
+    pub fn parse(word: &str) -> Option<Self> {
+        [
+            RunKind::Success,
+            RunKind::Failure,
+            RunKind::Exception,
+            RunKind::Skipped,
+            RunKind::Timeout,
+        ]
+        .into_iter()
+        .find(|k| k.as_str() == word)
+    }
+
+    /// A run as a trace keeps it: `{ "outcome": ..., "error": ... }`. None
+    /// when the outcome is missing or not a word this server writes.
+    pub fn of_trace(run: &Value) -> Option<Self> {
+        let kind = Self::parse(run["outcome"].as_str()?)?;
+        Some(match kind {
+            RunKind::Failure if run["error"].is_string() => RunKind::Exception,
+            other => other,
+        })
+    }
+
+    /// Whether the run went wrong: failed, threw or timed out.
+    pub fn went_wrong(self) -> bool {
+        match self {
+            RunKind::Success | RunKind::Skipped => false,
+            RunKind::Failure | RunKind::Exception | RunKind::Timeout => true,
+        }
+    }
+
+    /// The status `addEventCallback` reports for the run. sGTM has no word
+    /// for a skipped run, so it reads as a success there.
+    fn sgtm_status(self) -> &'static str {
+        match self {
+            RunKind::Success | RunKind::Skipped => "success",
+            RunKind::Failure => "failure",
+            RunKind::Exception => "exception",
+            RunKind::Timeout => "timeout",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TagRun {
     pub tag: String,
     pub event: usize,
-    pub outcome: &'static str,
+    pub outcome: TagOutcome,
     pub error: Option<String>,
-    /// Why a tag chose not to send (`outcome` is then "skipped").
+    /// Why a tag chose not to send (`outcome` is then `Skipped`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skip: Option<String>,
+}
+
+impl TagRun {
+    pub fn kind(&self) -> RunKind {
+        match (self.outcome, &self.error) {
+            (TagOutcome::Success, _) => RunKind::Success,
+            (TagOutcome::Failure, Some(_)) => RunKind::Exception,
+            (TagOutcome::Failure, None) => RunKind::Failure,
+            (TagOutcome::Skipped, _) => RunKind::Skipped,
+            (TagOutcome::Timeout, _) => RunKind::Timeout,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,6 +254,14 @@ pub struct SendRecord {
     /// visitor's own details.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+}
+
+impl SendRecord {
+    /// Whether the platform took the send: it answered, and not with an
+    /// error status.
+    pub fn accepted(&self) -> bool {
+        self.result.as_ref().is_ok_and(|status| *status < 400)
+    }
 }
 
 pub type Storage = Arc<Mutex<HashMap<String, HashMap<String, String>>>>;
@@ -385,12 +524,7 @@ impl Engine {
                 continue;
             }
             let skip = st.tag_skipped.get(&i).cloned();
-            let outcome = match st.tag_done.get(&i) {
-                Some(true) if skip.is_some() => "skipped",
-                Some(true) => "success",
-                Some(false) => "failure",
-                None => "timeout",
-            };
+            let outcome = TagOutcome::reported(st.tag_done.get(&i).copied(), skip.is_some());
             result.tags.push(TagRun {
                 tag: m.name.clone(),
                 event: m.event.unwrap_or(0),
@@ -617,13 +751,23 @@ impl Engine {
                 .tag_ctxs
                 .iter()
                 .map(|t| {
-                    let status = match st.tag_done.get(t) {
-                        _ if errors.contains_key(t) => "exception",
-                        Some(true) => "success",
-                        Some(false) => "failure",
-                        None => "timeout",
+                    // A tag that threw is an exception, whatever it had
+                    // reported before.
+                    let kind = if errors.contains_key(t) {
+                        RunKind::Exception
+                    } else {
+                        let reported = TagOutcome::reported(
+                            st.tag_done.get(t).copied(),
+                            st.tag_skipped.contains_key(t),
+                        );
+                        match reported {
+                            TagOutcome::Success => RunKind::Success,
+                            TagOutcome::Failure => RunKind::Failure,
+                            TagOutcome::Skipped => RunKind::Skipped,
+                            TagOutcome::Timeout => RunKind::Timeout,
+                        }
                     };
-                    serde_json::json!({ "id": st.meta[*t].name, "status": status, "executionTime": 0 })
+                    serde_json::json!({ "id": st.meta[*t].name, "status": kind.sgtm_status(), "executionTime": 0 })
                 })
                 .collect();
             (callbacks, serde_json::json!({ "tags": tags }).to_string())

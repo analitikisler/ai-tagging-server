@@ -1084,6 +1084,7 @@ impl Integrations {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox::TagOutcome;
 
     fn builtin() -> Arc<ContainerFile> {
         ContainerFile::fixed(Container::builtin(), Default::default(), Default::default())
@@ -1388,7 +1389,7 @@ mod tests {
         let (r, sent) = run_test(&i, "meta", "purchase", &overrides);
         assert_eq!(r.claimed_by.as_deref(), Some("Admin test"));
         assert_eq!(r.tags.len(), 1, "no GA4 tag: {:?}", r.tags);
-        assert_eq!(r.tags[0].outcome, "success", "{:?}", r);
+        assert_eq!(r.tags[0].outcome, TagOutcome::Success, "{:?}", r);
         assert_eq!(sent.len(), 1);
         assert!(sent[0].url.contains("graph.facebook.com"));
         let body: Value = serde_json::from_str(&sent[0].body).unwrap();
@@ -1427,7 +1428,7 @@ mod tests {
         .unwrap();
         // TikTok has no page_view event.
         let (r, sent) = run_test(&i, "tiktok", "page_view", &none);
-        assert_eq!(r.tags[0].outcome, "skipped");
+        assert_eq!(r.tags[0].outcome, TagOutcome::Skipped);
         assert_eq!(r.tags[0].skip.as_deref(), Some("unmapped_event"));
         assert!(sent.is_empty());
         let mode = TestOverrides {
@@ -1465,7 +1466,7 @@ mod tests {
         .unwrap();
         // The test event carries an email, so LinkedIn can match it.
         let (r, sent) = run_test(&i, "linkedin", "purchase", &TestOverrides::default());
-        assert_eq!(r.tags[0].outcome, "success", "{:?}", r);
+        assert_eq!(r.tags[0].outcome, TagOutcome::Success, "{:?}", r);
         let body: Value = serde_json::from_str(&sent[0].body).unwrap();
         assert_eq!(body["conversion"], "urn:lla:llaPartnerConversion:123");
         assert_eq!(body["user"]["userIds"][0]["idType"], "SHA256_EMAIL");
