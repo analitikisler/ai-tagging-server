@@ -21,7 +21,7 @@ fn counts(events: &[(&str, u64)]) -> Counts {
 
 fn kinds(f: &[Finding]) -> Vec<(&str, &str, &str)> {
     f.iter()
-        .map(|f| (f.kind, f.subject.as_str(), f.severity))
+        .map(|f| (f.kind.as_str(), f.subject.as_str(), f.severity.as_str()))
         .collect()
 }
 
@@ -86,6 +86,7 @@ fn failing_vendors_and_tags_are_found_even_while_learning() {
         Runs {
             runs: 30,
             failed: 18,
+            skipped: 0,
         },
     );
     let f = evaluate("shop", &now, &[], &Config::default());
@@ -97,7 +98,7 @@ fn failing_vendors_and_tags_are_found_even_while_learning() {
     assert!(k.contains(&("tag_failing", "Meta", "problem")), "{k:?}");
     assert!(!k.iter().any(|(_, s, _)| *s == "www.google-analytics.com"));
     assert!(f.iter().all(|f| f.site == "shop"));
-    let v = f.iter().find(|f| f.kind == "vendor_failing").unwrap();
+    let v = f.iter().find(|f| f.kind == Kind::VendorFailing).unwrap();
     assert!(
         words(v.kind, &v.subject, &v.numbers, "en")
             .1
@@ -150,7 +151,7 @@ fn missing_values_unclaimed_hits_and_renamed_events() {
         k.contains(&("name_changed", "purchase→Purchase", "warning")),
         "{k:?}"
     );
-    let n = f.iter().find(|f| f.kind == "name_changed").unwrap();
+    let n = f.iter().find(|f| f.kind == Kind::NameChanged).unwrap();
     assert_eq!(
         words(n.kind, &n.subject, &n.numbers, "en").0,
         "purchase now arrives as Purchase"
@@ -277,12 +278,13 @@ async fn the_ai_explains_new_alerts_and_another_check_waits_for_the_lock() {
         Runs {
             runs: 30,
             failed: 30,
+            skipped: 0,
         },
     );
     put(&state, q - 1, c);
-    let explain = |a: Value| -> futures_util::future::BoxFuture<'static, Option<Value>> {
+    let explain = |a: Alert| -> futures_util::future::BoxFuture<'static, Option<Value>> {
         Box::pin(
-            async move { Some(json!({ "likely_cause": format!("cause of {}", a["subject"]) })) },
+            async move { Some(json!({ "likely_cause": format!("cause of {:?}", a.subject) })) },
         )
     };
     alerts
@@ -302,6 +304,187 @@ async fn the_ai_explains_new_alerts_and_another_check_waits_for_the_lock() {
         )
         .unwrap();
     assert!(alerts.check(Context { explain: None }).await["skipped"].is_string());
+}
+
+#[tokio::test]
+async fn an_alert_that_cant_be_judged_stays_open_and_a_worse_one_is_posted_later() {
+    let state = Arc::new(State::memory());
+    let (url, slack) = fake_slack().await;
+    let alerts = Alerts::new(
+        state.clone(),
+        Arc::new(History::new(state.clone())),
+        None,
+        Some(url),
+        None,
+    );
+    let q = quarter_now();
+    let meta = |runs, failed, skipped| {
+        let mut c = counts(&[("purchase", 30)]);
+        c.tags.insert(
+            "Meta".into(),
+            Runs {
+                runs,
+                failed,
+                skipped,
+            },
+        );
+        c
+    };
+    // 8 of 30 runs failed: a warning.
+    put(&state, q - 1, meta(30, 8, 0));
+    let r = alerts.check(Context { explain: None }).await;
+    assert_eq!(r["opened"], 1, "{r}");
+    assert!(slack.0.lock().unwrap()[0].starts_with("🟠"));
+
+    // Within the hour it becomes a problem: not posted yet, but not forgotten.
+    put(&state, q - 1, meta(30, 30, 0));
+    alerts.check(Context { explain: None }).await;
+    assert_eq!(slack.0.lock().unwrap().len(), 1);
+    let mut s = state.read("alerts/state.json").unwrap();
+    let id = s["open"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    assert_eq!(s["open"][&id]["notified_severity"], "warning");
+    // An hour after the first post, the next check says it got worse.
+    s["open"][&id]["notified_at"] = json!(now_ms() - REPEAT_MS);
+    state.write("alerts/state.json", &s).unwrap();
+    alerts.check(Context { explain: None }).await;
+    let posted = slack.0.lock().unwrap().clone();
+    assert_eq!(posted.len(), 2, "{posted:?}");
+    assert!(posted[1].starts_with("Worse: 🔴"), "{}", posted[1]);
+
+    // A quiet hour: five runs say nothing either way, so it stays open.
+    put(&state, q - 1, meta(5, 0, 0));
+    let r = alerts.check(Context { explain: None }).await;
+    assert_eq!(
+        (r["resolved"].clone(), r["open"].clone()),
+        (json!(0), json!(1)),
+        "{r}"
+    );
+    // So do runs that all skipped their event: nothing was tried.
+    put(&state, q - 1, meta(30, 0, 30));
+    let r = alerts.check(Context { explain: None }).await;
+    assert_eq!(r["open"], 1, "{r}");
+
+    // Enough runs, all fine: now it is over.
+    put(&state, q - 1, meta(30, 0, 0));
+    let r = alerts.check(Context { explain: None }).await;
+    assert_eq!(r["resolved"], 1, "{r}");
+    assert!(slack.0.lock().unwrap()[2].starts_with("✅"));
+}
+
+#[tokio::test]
+async fn a_message_slack_didnt_take_goes_out_with_the_next_check() {
+    let state = Arc::new(State::memory());
+    // Nothing listens here, so the first post fails.
+    let down = Alerts::new(
+        state.clone(),
+        Arc::new(History::new(state.clone())),
+        None,
+        Some("http://127.0.0.1:9/hook".into()),
+        None,
+    );
+    let q = quarter_now();
+    let mut c = counts(&[("purchase", 30)]);
+    c.tags.insert(
+        "Meta".into(),
+        Runs {
+            runs: 30,
+            failed: 30,
+            skipped: 0,
+        },
+    );
+    put(&state, q - 1, c);
+    let r = down.check(Context { explain: None }).await;
+    assert_eq!(
+        (r["opened"].clone(), r["posted"].clone()),
+        (json!(1), json!(0)),
+        "{r}"
+    );
+    assert!(r["slack_error"].is_string());
+
+    // Slack is back: the same state, a working address.
+    let (url, slack) = fake_slack().await;
+    let up = Alerts::new(
+        state.clone(),
+        Arc::new(History::new(state.clone())),
+        None,
+        Some(url),
+        None,
+    );
+    let r = up.check(Context { explain: None }).await;
+    assert_eq!(r["posted"], 1, "{r}");
+    assert!(
+        slack.0.lock().unwrap()[0].contains("Meta"),
+        "{:?}",
+        slack.0.lock().unwrap()
+    );
+    // And only once.
+    up.check(Context { explain: None }).await;
+    assert_eq!(slack.0.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn kept_alerts_keep_their_words_and_survive_one_that_cant_be_read() {
+    let state = Arc::new(State::memory());
+    let alerts = Alerts::new(
+        state.clone(),
+        Arc::new(History::new(state.clone())),
+        None,
+        None,
+        None,
+    );
+    // As an earlier version kept them: no `notified_severity`, and one of a
+    // kind this version doesn't have.
+    let old = |kind: &str, severity: &str| {
+        json!({
+            "id": format!("{kind}||Meta"), "kind": kind, "site": "", "subject": "Meta",
+            "severity": severity, "numbers": {}, "texts": {},
+            "started_at": 5, "updated_at": 5, "notified_at": 5, "related": [], "diagnosis": null,
+        })
+    };
+    state
+        .write(
+            "alerts/state.json",
+            &json!({
+                "open": {
+                    "tag_failing||Meta": old("tag_failing", "warning"),
+                    "long_gone||Meta": old("long_gone", "problem"),
+                },
+                "recent": [old("event_drop", "problem")],
+                "last_check": { "at": 5 },
+            }),
+        )
+        .unwrap();
+    let v = alerts.view();
+    let open = v["open"].as_array().unwrap();
+    assert_eq!(open.len(), 1, "{v}");
+    // The console reads these words.
+    assert_eq!(open[0]["kind"], "tag_failing");
+    assert_eq!(open[0]["severity"], "warning");
+    assert_eq!(v["recent"][0]["kind"], "event_drop");
+    assert_eq!(v["last_check"]["at"], 5);
+    for kind in [
+        Kind::EventStopped,
+        Kind::EventDrop,
+        Kind::VendorFailing,
+        Kind::TagFailing,
+        Kind::MissingValue,
+        Kind::Unclaimed,
+        Kind::NameChanged,
+    ] {
+        assert_eq!(json!(kind), kind.as_str());
+        // Every kind has its own words in both languages.
+        for lang in ["en", "tr"] {
+            let (title, text) = words(kind, "purchase.value", &json!({}), lang);
+            assert!(!title.is_empty() && !text.is_empty(), "{kind:?} {lang}");
+        }
+    }
+    assert!(Severity::Problem > Severity::Warning);
 }
 
 #[test]

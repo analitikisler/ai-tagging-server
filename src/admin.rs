@@ -19,20 +19,22 @@ use serde_json::{Value, json};
 use sha2::Digest;
 
 use crate::ai::{Ai, AiError, audit, diagnose, explain, review, rules, setup, todo};
-use crate::alerts::{Alerts, Config as AlertConfig, Context as AlertContext};
+use crate::alerts::{
+    Alert, Alerts, Config as AlertConfig, Context as AlertContext, Kind as AlertKind,
+};
 use crate::checkup;
 use crate::container::{Condition, Container, Tag, compile_conditions};
 use crate::container_file::{Change, ContainerFile, EditError};
-use crate::eventlog::{CAPACITY, EventLog};
 use crate::history::{self, Before, History};
 use crate::integrations::{Enrichment, Integrations, TestOverrides, test_event};
 use crate::metrics::{self, METRICS};
 use crate::replay::{self, Hit};
 use crate::request::{IncomingRequest, remote_address, same};
+use crate::sandbox::RunResult;
 use crate::server::{Pool, Target, summarize};
 use crate::state::State as StateStore;
 use crate::tenants::{Tenant, Tenants};
-use crate::traces::{self, Filter, Traces};
+use crate::traces::{self, Filter, Record, Traces};
 use crate::transform::{self, Transformation};
 
 const CONSOLE: &str = include_str!("ui/console.html");
@@ -90,8 +92,6 @@ pub struct Admin {
     pub drafts: Option<Arc<crate::drafts::Drafts>>,
     /// Runs test events.
     pub pool: Arc<Pool>,
-    /// Recent hits; the server records into it in integrations mode.
-    pub log: Arc<EventLog>,
 }
 
 pub fn router(admin: Admin) -> Router {
@@ -170,8 +170,7 @@ pub fn router(admin: Admin) -> Router {
                 "/admin/api/integrations/{id}/test",
                 axum::routing::post(send_test),
             )
-            .route("/admin/api/enrichment", axum::routing::put(save_enrichment))
-            .route("/admin/api/events", get(events));
+            .route("/admin/api/enrichment", axum::routing::put(save_enrichment));
     }
     if admin.ai.is_some() {
         router = router
@@ -188,7 +187,27 @@ pub fn router(admin: Admin) -> Router {
                 axum::routing::post(ai_transformation),
             );
     }
-    router.with_state(admin)
+    router
+        .layer(axum::middleware::from_fn_with_state(admin.clone(), gate))
+        .with_state(admin)
+}
+
+/// Turns away an API request without the token before any handler runs, so
+/// nothing of its body (up to 2 MB) is read or held while it waits for its
+/// answer. The alert check's own token is left to its handler.
+async fn gate(
+    State(a): State<Admin>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let path = req.uri().path();
+    if path.starts_with("/admin/api/")
+        && path != "/admin/api/alerts/check"
+        && let Err(r) = authorize(&a, req.headers()).await
+    {
+        return *r;
+    }
+    next.run(req).await
 }
 
 /// The console with each asset's URL carrying a hash of its content
@@ -253,8 +272,8 @@ fn page(html: &'static str) -> Response {
 
 /// Checks the bearer token. A wrong guess holds one of a few permits while it
 /// waits to be answered, so guesses sent in parallel queue up too: about
-/// eight a second per instance. The right token still gets through, only
-/// later, so nobody can lock the admin out on purpose.
+/// eight a second per instance. The right token is answered at once and
+/// never waits behind them, so nobody can lock the admin out on purpose.
 async fn authorize(admin: &Admin, headers: &HeaderMap) -> Result<(), Box<Response>> {
     static CHECKS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
     let given = headers
@@ -263,10 +282,10 @@ async fn authorize(admin: &Admin, headers: &HeaderMap) -> Result<(), Box<Respons
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("")
         .trim();
-    let _permit = CHECKS.acquire().await.expect("never closed");
     if same(given, &admin.token) {
         return Ok(());
     }
+    let _permit = CHECKS.acquire().await.expect("never closed");
     tokio::time::sleep(Duration::from_millis(500)).await;
     Err(Box::new(error(
         StatusCode::UNAUTHORIZED,
@@ -333,10 +352,25 @@ fn ai_error(e: AiError) -> Response {
 }
 
 /// The console's view of the container a tenant's hits run on, or of the
-/// one container outside multi-site mode.
+/// one container outside multi-site mode: there, the draft when there is
+/// one, since that is what the console shows and edits.
 fn container_for(a: &Admin, tenant: Option<&str>) -> Result<Value, Box<Response>> {
+    container_view_for(a, tenant, true)
+}
+
+/// The same, but always the container that runs: what live hits, the setup
+/// check and alerts are judged against, whatever a draft holds.
+fn live_container_for(a: &Admin, tenant: Option<&str>) -> Result<Value, Box<Response>> {
+    container_view_for(a, tenant, false)
+}
+
+fn container_view_for(
+    a: &Admin,
+    tenant: Option<&str>,
+    with_draft: bool,
+) -> Result<Value, Box<Response>> {
     let Target::Multi(tenants) = &a.target else {
-        return Ok(current_view(a));
+        return Ok(view_of(a, with_draft));
     };
     let Some(id) = tenant.filter(|t| !t.is_empty()) else {
         return Err(Box::new(error(
@@ -366,11 +400,19 @@ async fn ai_explain(
     let Some(t) = a.traces.get(id) else {
         return error(StatusCode::NOT_FOUND, "no such trace, or no longer kept");
     };
-    let container = match container_for(&a, t["tenant"].as_str()) {
+    // A preview hit ran the draft; any other ran the live container.
+    let container = if t.tenant.as_deref() == Some("preview") {
+        container_for(&a, None)
+    } else {
+        live_container_for(&a, t.tenant.as_deref())
+    };
+    let container = match container {
         Ok(c) => c,
         Err(r) => return *r,
     };
-    match explain::explain(ai, id, &traces::for_ai(&t), &container, q.lang.as_deref()).await {
+    let mut trace = traces::for_ai(&t);
+    trace["id"] = json!(id);
+    match explain::explain(ai, id, &trace, &container, q.lang.as_deref()).await {
         Ok(v) => ok(v),
         Err(e) => ai_error(e),
     }
@@ -405,6 +447,12 @@ async fn ai_transformation(
         return error(
             StatusCode::BAD_REQUEST,
             &format!("describe the change in 1 to {MAX_REQUEST} characters"),
+        );
+    }
+    if setup::looks_secret(request) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "this looks like it holds a token or key; leave secrets out of the request",
         );
     }
     let tenant = q.tenant.as_deref().filter(|t| !t.is_empty());
@@ -452,16 +500,12 @@ async fn ai_audit(
         return error(StatusCode::NOT_FOUND, "the AI is off");
     };
     let tenant = q.tenant.as_deref().filter(|t| !t.is_empty());
-    let container = match container_for(&a, tenant) {
+    let container = match live_container_for(&a, tenant) {
         Ok(c) => c,
         Err(r) => return *r,
     };
-    let hits: Vec<(u64, Value)> = a
-        .traces
-        .details(tenant)
-        .iter()
-        .map(|(id, t)| (*id, traces::for_ai(t)))
-        .collect();
+    // Only counts made from the hits go to the AI, never the hits.
+    let hits = a.traces.details(tenant);
     let retries = METRICS
         .send_retries
         .load(std::sync::atomic::Ordering::Relaxed);
@@ -491,7 +535,7 @@ async fn trace(State(a): State<Admin>, headers: HeaderMap, Path(id): Path<u64>) 
         return *r;
     }
     match a.traces.get(id) {
-        Some(t) => ok(t),
+        Some(t) => ok(traces::with_id(id, &*t)),
         None => error(StatusCode::NOT_FOUND, "no such trace, or no longer kept"),
     }
 }
@@ -517,22 +561,23 @@ async fn container(
     if let Err(r) = authorize(&a, &headers).await {
         return *r;
     }
-    if let Target::Multi(tenants) = &a.target {
-        let Some(id) = q.tenant.as_deref().filter(|t| !t.is_empty()) else {
-            return error(StatusCode::BAD_REQUEST, "name a tenant with ?tenant=");
-        };
-        tenants.reload_if_changed();
-        return match tenants.get(id) {
-            Some(r) => ok(container_view(&r.container, None, Some(MULTI_READ_ONLY))),
-            None => error(StatusCode::NOT_FOUND, "no such tenant"),
-        };
+    match container_for(&a, q.tenant.as_deref()) {
+        Ok(view) => ok(view),
+        Err(r) => *r,
     }
-    ok(current_view(&a))
 }
 
 const MULTI_READ_ONLY: &str =
     "Each site runs the built-in container, so tags can't be edited with TENANTS_FILE.";
 const BUILTIN_READ_ONLY: &str = "The server runs the built-in container. Start it with CONTAINER_FILE=<path to a container file> to edit tags here.";
+
+/// Why there is nothing to edit, publish or discard.
+fn read_only_reason(a: &Admin) -> &'static str {
+    match a.target {
+        Target::Multi(_) => MULTI_READ_ONLY,
+        _ => BUILTIN_READ_ONLY,
+    }
+}
 
 /// The container file edits go to, outside multi-site mode.
 fn editable(a: &Admin) -> Option<&Arc<ContainerFile>> {
@@ -556,11 +601,19 @@ fn view_of(a: &Admin, with_draft: bool) -> Value {
     file.reload_if_changed();
     let live = file.resolved().container;
     // With a draft, the console shows and edits the draft.
-    let draft = a
+    let stored = a
         .drafts
         .as_ref()
         .filter(|_| with_draft)
-        .and_then(|d| Some((d.get()?, d.container()?)));
+        .and_then(|d| d.get());
+    let draft = stored.and_then(|d| Some((d, a.drafts.as_ref()?.container()?)));
+    // A draft that no longer loads (a template file it names is gone, say)
+    // can only be discarded: the console shows live with a way to do that.
+    let broken = a
+        .drafts
+        .as_ref()
+        .filter(|_| with_draft && draft.is_none())
+        .and_then(|d| d.get());
     let (base, revision) = match &draft {
         Some((d, c)) => (c.clone(), Some(d.revision.clone())),
         None => (live.clone(), file.revision()),
@@ -585,7 +638,18 @@ fn view_of(a: &Admin, with_draft: bool) -> Value {
                 "edits": history::describe(&live, c),
             })
         }
-        None => Value::Null,
+        None => match &broken {
+            Some(d) => json!({
+                "revision": d.revision,
+                "base": d.base,
+                "live_revision": file.revision().unwrap_or_default(),
+                "stale": false,
+                "updated_at": d.updated_at,
+                "edits": [],
+                "broken": true,
+            }),
+            None => Value::Null,
+        },
     };
     // Platform tags come after the file's own, and are set up under Integrations.
     if let Some(tags) = view["tags"].as_array_mut() {
@@ -791,7 +855,6 @@ fn parse_tag(body: &[u8]) -> Result<TagBody, Box<Response>> {
     Ok(b)
 }
 
-/// Runs an edit and answers with the container as it is afterwards.
 /// Where a change goes: the draft (the console's edits) or live (an undo,
 /// which rolls live back).
 #[derive(Clone, Copy, PartialEq)]
@@ -916,7 +979,7 @@ async fn publish(State(a): State<Admin>, headers: HeaderMap, body: Bytes) -> Res
         Err(r) => return *r,
     };
     let (Some(d), Some(file)) = (&a.drafts, editable(&a)) else {
-        return error(StatusCode::BAD_REQUEST, BUILTIN_READ_ONLY);
+        return error(StatusCode::BAD_REQUEST, read_only_reason(&a));
     };
     let name = b.name.trim().chars().take(100).collect::<String>();
     let note = b.note.trim().chars().take(1000).collect::<String>();
@@ -952,7 +1015,7 @@ async fn discard_draft(State(a): State<Admin>, headers: HeaderMap) -> Response {
         return *r;
     }
     let Some(d) = &a.drafts else {
-        return error(StatusCode::BAD_REQUEST, BUILTIN_READ_ONLY);
+        return error(StatusCode::BAD_REQUEST, read_only_reason(&a));
     };
     d.discard();
     tracing::info!("admin: discarded the draft");
@@ -962,10 +1025,10 @@ async fn discard_draft(State(a): State<Admin>, headers: HeaderMap) -> Response {
 /// Runs the alert checks, with the AI explaining new alerts when it is on.
 pub async fn run_alert_check(a: &Admin) -> Value {
     type Explain =
-        dyn Fn(Value) -> futures_util::future::BoxFuture<'static, Option<Value>> + Send + Sync;
+        dyn Fn(Alert) -> futures_util::future::BoxFuture<'static, Option<Value>> + Send + Sync;
     let explain: Option<Box<Explain>> = a.ai.clone().map(|ai| {
         let admin = a.clone();
-        Box::new(move |alert: Value| {
+        Box::new(move |alert: Alert| {
             let (ai, admin) = (ai.clone(), admin.clone());
             Box::pin(async move { explain_alert(&admin, &ai, &alert).await })
                 as futures_util::future::BoxFuture<'static, Option<Value>>
@@ -978,42 +1041,51 @@ pub async fn run_alert_check(a: &Admin) -> Value {
         .await
 }
 
-/// The AI's diagnosis of a new alert, with a few recent hits that show it.
-async fn explain_alert(a: &Admin, ai: &Ai, alert: &Value) -> Option<Value> {
-    let site = alert["site"].as_str().filter(|s| !s.is_empty());
-    let subject = alert["subject"].as_str().unwrap_or_default();
-    let event = subject.split(['.', '→']).next().unwrap_or(subject);
-    let shows = |t: &Value| -> bool {
-        let r = &t["result"];
-        let sends = r["sends"].as_array().into_iter().flatten();
-        match alert["kind"].as_str().unwrap_or_default() {
-            "vendor_failing" => sends
-                .filter(|s| s["url"].as_str().is_some_and(|u| u.contains(subject)))
-                .any(|s| s["result"]["Ok"].as_u64().is_none_or(|c| c >= 400)),
-            "tag_failing" => r["tags"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|x| x["tag"] == subject && x["outcome"] != "success"),
-            "unclaimed" => r["claimed_by"].is_null(),
-            _ => r["events"].as_array().into_iter().flatten().any(|e| {
-                e["event_name"]
-                    .as_str()
-                    .is_some_and(|n| n.eq_ignore_ascii_case(event))
-            }),
+/// Whether a hit's run shows what an alert is about: a refused send to its
+/// vendor, a failed run of its tag, an unclaimed hit, or its event.
+fn shows_alert(alert: &Alert, r: &RunResult) -> bool {
+    let subject = alert.subject.as_str();
+    // An event's name can hold dots, so only a missing value's key and a
+    // rename's new name are cut off the subject.
+    let event = match alert.kind {
+        AlertKind::VendorFailing => {
+            return r
+                .sends
+                .iter()
+                .any(|s| s.url.contains(subject) && !s.accepted());
         }
+        AlertKind::TagFailing => {
+            return r
+                .tags
+                .iter()
+                .any(|t| t.tag == subject && t.outcome.went_wrong());
+        }
+        AlertKind::Unclaimed => return r.claimed_by.is_none(),
+        AlertKind::MissingValue => subject.rsplit_once('.').map_or(subject, |(e, _)| e),
+        AlertKind::NameChanged => subject.split('→').next().unwrap_or(subject),
+        AlertKind::EventStopped | AlertKind::EventDrop => subject,
     };
+    r.events.iter().any(|e| {
+        e["event_name"]
+            .as_str()
+            .is_some_and(|n| n.eq_ignore_ascii_case(event))
+    })
+}
+
+/// The AI's diagnosis of a new alert, with a few recent hits that show it.
+async fn explain_alert(a: &Admin, ai: &Ai, alert: &Alert) -> Option<Value> {
+    let site = Some(alert.site.as_str()).filter(|s| !s.is_empty());
     let hits: Vec<Value> = a
         .traces
-        .details(site)
+        .details_where(site, 3, |t| {
+            t.result.as_ref().is_some_and(|r| shows_alert(alert, r))
+        })
         .iter()
-        .filter(|(_, t)| shows(t))
-        .take(3)
         .map(|(_, t)| traces::for_ai(t))
         .collect();
-    let container = container_for(a, site).unwrap_or(Value::Null);
+    let container = live_container_for(a, site).unwrap_or(Value::Null);
     let lang = a.alerts.config().language;
-    match diagnose::diagnose(ai, alert, &hits, &container, Some(&lang)).await {
+    match diagnose::diagnose(ai, &json!(alert), &hits, &container, Some(&lang)).await {
         Ok(v) => Some(v),
         Err(e) => {
             tracing::warn!("alerts: no diagnosis: {}", e.message());
@@ -1081,17 +1153,13 @@ async fn alerts_test(State(a): State<Admin>, headers: HeaderMap) -> Response {
 fn replay_hits(a: &Admin, tenant: Option<&str>) -> Vec<Hit> {
     let mut hits: Vec<Hit> = a
         .traces
-        .details(tenant)
+        .details_where(tenant, replay::MAX_HITS, |t| t.result.is_some())
         .into_iter()
-        .filter(|(_, t)| !t["result"].is_null())
-        .take(replay::MAX_HITS)
-        .filter_map(|(id, t)| {
-            Some(Hit {
-                trace: Some(id),
-                pinned: None,
-                at: t["at"].as_u64().unwrap_or(0),
-                request: replay::request(&t["request"])?,
-            })
+        .map(|(id, t)| Hit {
+            trace: Some(id),
+            pinned: None,
+            at: t.at,
+            request: t.request.to_request(),
         })
         .collect();
     for p in pinned_list(a) {
@@ -1164,14 +1232,14 @@ async fn pin(State(a): State<Admin>, headers: HeaderMap, body: Bytes) -> Respons
     let Some(t) = a.traces.get(b.trace) else {
         return error(StatusCode::NOT_FOUND, "no such trace, or no longer kept");
     };
-    let at = t["at"].as_u64().unwrap_or(0);
     let id = format!("{}-{}", crate::state::now_ms(), b.trace);
-    let mut entry = replay::pinned_entry(&id, label, t["tenant"].as_str(), at, &t["request"]);
+    // A hit made while previewing is a test case like any other, not one
+    // for a site called "preview".
+    let tenant = t.tenant.as_deref().filter(|t| *t != "preview");
+    let mut entry = replay::pinned_entry(&id, label, tenant, t.at, &t.request);
     entry["events"] = json!(
-        t["result"]["events"]
-            .as_array()
-            .into_iter()
-            .flatten()
+        t.events()
+            .iter()
             .filter_map(|e| e["event_name"].as_str())
             .collect::<Vec<_>>()
     );
@@ -1218,8 +1286,8 @@ async fn ai_checkup(
         Ok(b) => b,
         Err(r) => return *r,
     };
-    let container =
-        container_for(&a, q.tenant.as_deref().filter(|t| !t.is_empty())).unwrap_or(Value::Null);
+    let container = live_container_for(&a, q.tenant.as_deref().filter(|t| !t.is_empty()))
+        .unwrap_or(Value::Null);
     match todo::todo(ai, &b.items, &b.web, &container, q.lang.as_deref()).await {
         Ok(v) => ok(v),
         Err(e) => ai_error(e),
@@ -1249,13 +1317,33 @@ async fn live_start(State(a): State<Admin>, headers: HeaderMap, body: Bytes) -> 
             Err(r) => return *r,
         }
     };
+    if b.preview && a.drafts.as_ref().and_then(|d| d.get()).is_none() {
+        return error(StatusCode::BAD_REQUEST, "there is no draft to preview");
+    }
     let now = crate::state::now_ms();
-    let digest = sha2::Sha256::digest(format!("{now}-{}", a.state.instance).as_bytes());
-    let code: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
-    let _ = a.state.write(
+    // Sessions that have run out go as new ones start, so they don't pile up.
+    for name in a.state.list("checkup") {
+        if !name.starts_with("live-") {
+            continue;
+        }
+        let rel = format!("checkup/{name}");
+        let over = a
+            .state
+            .read(&rel)
+            .is_none_or(|s| s["since"].as_u64().unwrap_or(0) + crate::server::PREVIEW_MS < now);
+        if over {
+            a.state.remove(&rel);
+        }
+    }
+    // The code decides which browser runs the draft, so it is random, not
+    // made from the time.
+    let code = format!("{:08x}", crate::store::unique() as u32);
+    if let Err(e) = a.state.write(
         &format!("checkup/live-{code}.json"),
         &json!({ "code": code, "since": now, "preview": b.preview, "send": b.send }),
-    );
+    ) {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &e);
+    }
     ok(json!({ "code": code, "since": now, "preview": b.preview, "send": b.send }))
 }
 
@@ -1292,7 +1380,8 @@ async fn live_view(
     ok(checkup::live(
         &code,
         since,
-        &a.traces.details(None),
+        // Polled every few seconds: only the hits since the check began.
+        &a.traces.details_where(None, usize::MAX, |t| t.at >= since),
         &container,
         &pixels,
     ))
@@ -1341,7 +1430,7 @@ async fn checkup_view(
         return *r;
     }
     let tenant = q.tenant.as_deref().filter(|t| !t.is_empty());
-    let container = match container_for(&a, tenant) {
+    let container = match live_container_for(&a, tenant) {
         Ok(c) => c,
         Err(r) => return *r,
     };
@@ -1376,11 +1465,10 @@ async fn checkup_view(
     })
     .await
     .unwrap_or_default();
-    let hits: Vec<Value> = a
+    let hits: Vec<Arc<Record>> = a
         .traces
-        .details(tenant)
+        .details_where(tenant, 200, |_| true)
         .into_iter()
-        .take(200)
         .map(|(_, t)| t)
         .collect();
     let items = checkup::check(&container, &counts, &hits, web.as_ref());
@@ -1507,16 +1595,20 @@ async fn ai_setup(
         }
         let rules: Vec<Value> =
             serde_json::from_value(rules.clone()).map_err(|e| format!("transformations: {e}"))?;
-        file.apply(
-            &revision,
-            Change::Setup {
-                tags,
-                transformations: rules,
-            },
-            true,
-        )
-        .map(|_| ())
-        .map_err(|e| match e {
+        let change = Change::Setup {
+            tags,
+            transformations: rules,
+        };
+        // Checked against what Apply saves into: the draft, which may hold
+        // secrets live doesn't have yet.
+        let checked = match &a.drafts {
+            Some(d) => {
+                let revision = d.get().map_or_else(|| revision.clone(), |d| d.revision);
+                d.edit(&revision, change, true)
+            }
+            None => file.apply(&revision, change, true),
+        };
+        checked.map(|_| ()).map_err(|e| match e {
             EditError::Invalid(m) | EditError::Io(m) => m,
             EditError::Conflict(_) => "the container changed meanwhile; ask again".into(),
             EditError::NotFound => "a tag it names doesn't exist".into(),
@@ -1834,8 +1926,6 @@ async fn test_tag(
 /// passwords, credentials, auth values, header values and keys (`api_key`,
 /// `apiKey`). Ids (`pixel_id`, `allowedMeasurementIds`) and a bare `key`
 /// (the enrichment's lookup field) are not secrets.
-/// Whether a setting's name says it holds a secret (`*token*`, `*secret*`,
-/// `*key`…). Ids never count.
 pub(crate) fn secret_name(name: &str) -> bool {
     let n: String = name
         .chars()
@@ -2018,26 +2108,6 @@ async fn save_enrichment(
 }
 
 #[derive(Deserialize)]
-struct EventsQuery {
-    limit: Option<usize>,
-    /// Only hits where a tag whose name contains this ran.
-    tag: Option<String>,
-}
-
-async fn events(
-    State(a): State<Admin>,
-    headers: HeaderMap,
-    Query(q): Query<EventsQuery>,
-) -> Response {
-    if let Err(r) = authorize(&a, &headers).await {
-        return *r;
-    }
-    let limit = q.limit.unwrap_or(50).min(CAPACITY);
-    let tag = q.tag.as_deref().filter(|t| !t.is_empty());
-    ok(json!({ "events": a.log.recent(limit, tag), "capacity": CAPACITY }))
-}
-
-#[derive(Deserialize)]
 struct SendTestBody {
     #[serde(default = "purchase")]
     event: String,
@@ -2050,8 +2120,8 @@ fn purchase() -> String {
 }
 
 /// Sends one made-up event through one provider's tag, with the caller's IP
-/// and user agent as the visitor's, and answers what happened, as the event
-/// log shows it.
+/// and user agent as the visitor's, and answers what happened: how the tag
+/// ended and what the platform answered.
 async fn send_test(
     State(a): State<Admin>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -2116,7 +2186,7 @@ async fn send_test(
         body.event,
         summarize(&result)
     );
-    let entry = a.log.record("admin test", &result, started.elapsed(), true);
+    let entry = crate::eventlog::summary("admin test", &result, started.elapsed(), true);
     ok(json!({ "entry": entry }))
 }
 
@@ -2195,7 +2265,6 @@ mod tests {
         );
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -2343,7 +2412,6 @@ mod tests {
         ran(vec![json!({ "event_name": "purchase", "value": 7 })]);
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -2535,7 +2603,6 @@ mod tests {
         );
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -2669,7 +2736,6 @@ mod tests {
         let state = Arc::new(crate::state::State::memory());
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -2752,7 +2818,6 @@ mod tests {
         let history = Arc::new(crate::history::History::new(state.clone()));
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -2830,7 +2895,6 @@ mod tests {
         let state = Arc::new(crate::state::State::memory());
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -2944,7 +3008,6 @@ mod tests {
         let f = ContainerFile::fixed(Container::builtin(), Default::default(), Default::default());
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),

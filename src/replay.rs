@@ -103,6 +103,51 @@ impl Transport for Dry {
     }
 }
 
+/// A dry preview on a live site: nothing reaches a platform, but Google's
+/// own scripts are still fetched for real. The Google scripts client serves
+/// what it fetches as `gtm.js`, so a canned answer there would hand the
+/// previewing browser an empty script and stop its tags from loading.
+pub struct DryPreview {
+    real: Arc<dyn Transport>,
+}
+
+impl DryPreview {
+    pub fn new(real: Arc<dyn Transport>) -> Self {
+        DryPreview { real }
+    }
+
+    fn fetched_for_real(o: &Outgoing) -> bool {
+        o.method.eq_ignore_ascii_case("GET")
+            && o.body.is_empty()
+            && o.url.starts_with("https://www.googletagmanager.com/")
+    }
+}
+
+impl Transport for DryPreview {
+    fn send_all(&self, requests: Vec<Outgoing>) -> Vec<Result<SendResult, String>> {
+        let real: Vec<bool> = requests.iter().map(Self::fetched_for_real).collect();
+        let (fetch, dry): (Vec<Outgoing>, Vec<Outgoing>) =
+            requests.into_iter().partition(Self::fetched_for_real);
+        let mut fetched = if fetch.is_empty() {
+            Vec::new()
+        } else {
+            self.real.send_all(fetch)
+        }
+        .into_iter();
+        let mut canned = Dry.send_all(dry).into_iter();
+        real.into_iter()
+            .map(|is_real| {
+                if is_real {
+                    fetched.next()
+                } else {
+                    canned.next()
+                }
+                .unwrap_or_else(|| Err("no answer".into()))
+            })
+            .collect()
+    }
+}
+
 fn engine(c: Arc<Container>) -> Result<(Engine, Arc<Canned>), String> {
     let canned = Arc::new(Canned::default());
     let e = Engine::new(c, Default::default(), canned.clone(), BUDGET, MEMORY)
@@ -162,14 +207,20 @@ fn flatten(v: &Value, at: &str, out: &mut BTreeMap<String, String>) {
 type Params = (String, BTreeMap<String, String>);
 
 /// The sends of a run, by tag, in order. The record and the transport see
-/// sends in the same order.
+/// sends in the same order, but the transport sees fewer: a lookup two tags
+/// share goes out once, and a send that ran out of time not at all. So each
+/// record takes the transport's next request only when it is its own.
 fn sends(r: &RunResult, outgoing: &[Outgoing]) -> BTreeMap<String, Vec<Params>> {
     let mut out: BTreeMap<String, Vec<_>> = BTreeMap::new();
-    for (i, s) in r.sends.iter().enumerate() {
-        let body = outgoing
-            .get(i)
-            .filter(|o| o.url == s.url)
-            .map_or("", |o| o.body.as_str());
+    let mut next = 0;
+    for s in &r.sends {
+        let body = match outgoing.get(next) {
+            Some(o) if o.url == s.url && o.method.eq_ignore_ascii_case(&s.method) => {
+                next += 1;
+                o.body.as_str()
+            }
+            _ => "",
+        };
         out.entry(s.from.clone())
             .or_default()
             .push(params(&s.url, body));
@@ -366,8 +417,9 @@ pub fn pinned_entry(
     label: &str,
     tenant: Option<&str>,
     at: u64,
-    request: &Value,
+    request: &crate::traces::Captured,
 ) -> Value {
+    let request = serde_json::to_value(request).unwrap_or_default();
     let mut m = Map::new();
     for k in [
         "method",
@@ -385,6 +437,92 @@ pub fn pinned_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dry_preview_still_fetches_googles_scripts_and_nothing_else() {
+        struct Real;
+        impl Transport for Real {
+            fn send_all(&self, requests: Vec<Outgoing>) -> Vec<Result<SendResult, String>> {
+                requests
+                    .iter()
+                    .map(|o| {
+                        Ok(SendResult {
+                            status: 200,
+                            headers: vec![],
+                            body: format!("real {}", o.url),
+                        })
+                    })
+                    .collect()
+            }
+        }
+        let request = |method: &str, url: &str| Outgoing {
+            url: url.into(),
+            method: method.into(),
+            headers: vec![],
+            body: String::new(),
+            timeout: std::time::Duration::from_secs(1),
+            google_auth: false,
+        };
+        let answers = DryPreview::new(Arc::new(Real)).send_all(vec![
+            request("POST", "https://graph.facebook.com/v21.0/1/events"),
+            request("GET", "https://www.googletagmanager.com/gtm.js?id=GTM-1"),
+            request("GET", "https://www.google-analytics.com/g/collect?v=2"),
+        ]);
+        let bodies: Vec<String> = answers.into_iter().map(|a| a.unwrap().body).collect();
+        assert_eq!(
+            bodies,
+            [
+                "{}",
+                "real https://www.googletagmanager.com/gtm.js?id=GTM-1",
+                "{}"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_shared_lookup_doesnt_cost_later_sends_their_bodies() {
+        let record = |from: &str, method: &str, url: &str| crate::sandbox::SendRecord {
+            from: from.into(),
+            method: method.into(),
+            url: url.into(),
+            result: Ok(200),
+            detail: None,
+        };
+        let request = |method: &str, url: &str, body: &str| Outgoing {
+            url: url.into(),
+            method: method.into(),
+            headers: vec![],
+            body: body.into(),
+            timeout: std::time::Duration::from_secs(1),
+            google_auth: false,
+        };
+        // Both tags ask the enrichment endpoint; the transport sees it once.
+        let r = RunResult {
+            sends: vec![
+                record("Meta", "GET", "https://crm.example/u?user_id=1"),
+                record("TikTok", "GET", "https://crm.example/u?user_id=1"),
+                record("Meta", "POST", "https://graph.facebook.com/v21.0/1/events"),
+                record("TikTok", "POST", "https://business-api.tiktok.com/x"),
+            ],
+            ..Default::default()
+        };
+        let outgoing = [
+            request("GET", "https://crm.example/u?user_id=1", ""),
+            request(
+                "POST",
+                "https://graph.facebook.com/v21.0/1/events",
+                r#"{"currency":"EUR"}"#,
+            ),
+            request(
+                "POST",
+                "https://business-api.tiktok.com/x",
+                r#"{"currency":"TRY"}"#,
+            ),
+        ];
+        let by_tag = sends(&r, &outgoing);
+        assert_eq!(by_tag["Meta"][1].1["body.currency"], "EUR");
+        assert_eq!(by_tag["TikTok"][1].1["body.currency"], "TRY");
+    }
 
     fn hit(q: &str, trace: u64) -> Hit {
         // Consent granted, so the ad tags send.

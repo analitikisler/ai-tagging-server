@@ -10,6 +10,7 @@ use axum::routing::post;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::traces::Record;
 
 /// A stand-in for the Anthropic API: answers from a queue and keeps every
 /// request it got.
@@ -309,7 +310,7 @@ fn hit(
     events: &[&str],
     runs: &[(&str, usize)],
     sends: &[(&str, &str, Result<u16, &str>)],
-) -> (u64, Value) {
+) -> (u64, Arc<Record>) {
     let sends: Vec<Value> = sends
         .iter()
         .map(|(from, url, r)| {
@@ -322,18 +323,18 @@ fn hit(
         .collect();
     (
         id,
-        json!({
+        Record::of(json!({
             "at": 1_000 + id,
             "result": {
                 "events": events.iter().map(|e| json!({ "event_name": e })).collect::<Vec<_>>(),
                 "tags": runs.iter().map(|(t, e)| json!({ "tag": t, "event": e, "outcome": "success", "error": null })).collect::<Vec<_>>(),
                 "sends": sends,
             }
-        }),
+        })),
     )
 }
 
-fn sample_hits() -> Vec<(u64, Value)> {
+fn sample_hits() -> Vec<(u64, Arc<Record>)> {
     let ga = "https://region1.google-analytics.com/g/collect?v=2";
     let meta = "https://graph.facebook.com/v21.0/1/events";
     let mut hits = Vec::new();
@@ -361,7 +362,10 @@ fn sample_hits() -> Vec<(u64, Value)> {
         ));
     }
     // A refused hit: no result.
-    hits.push((5, json!({ "at": 1_005, "status": 503, "result": null })));
+    hits.push((
+        5,
+        Record::of(json!({ "at": 1_005, "status": 503, "result": null })),
+    ));
     hits
 }
 
@@ -447,7 +451,7 @@ async fn an_audit_without_hits_asks_nothing() {
     let fake = Fake::default();
     let base = fake.start().await;
     let ai = ai(&base, "claude-opus-5-5", 10);
-    let only_refused = vec![(1, json!({ "result": null }))];
+    let only_refused = vec![(1, Record::of(json!({ "result": null })))];
     assert_eq!(
         audit::audit(&ai, &only_refused, &container(), 0, None).await,
         Err(AiError::NoHits)
@@ -466,11 +470,13 @@ fn the_ai_never_gets_the_visitors_ip() {
             "remote_address": "203.0.113.9:5555",
         },
         "result": {
-            "events": [{ "event_name": "page_view", "ip_override": "203.0.113.9", "nested": { "client_ip": "203.0.113.9" } }],
+            "events": [{ "event_name": "page_view", "ip_override": "203.0.113.9", "nested": { "client_ip": "203.0.113.9" },
+                         "x-sst-raw-hit": "v=2&_uip=203.0.113.9&en=page_view" }],
+            "sends": [{ "from": "GA4", "url": "https://www.google-analytics.com/g/collect?v=2&en=page_view&_uip=203.0.113.9&_ua=UA", "result": { "Ok": 204 } }],
             "logs": (0..150).map(|i| json!(format!("line {i}"))).collect::<Vec<_>>(),
         }
     });
-    let t = crate::traces::for_ai(&detail);
+    let t = crate::traces::for_ai(&Record::of(detail));
     let text = t.to_string();
     assert!(!text.contains("203.0.113.9"), "{text}");
     assert_eq!(t["request"]["query"], "v=2&en=page_view");
@@ -484,6 +490,14 @@ fn the_ai_never_gets_the_visitors_ip() {
     assert_eq!(t["request"]["body"].as_str().unwrap().len(), 8 * 1024);
     assert_eq!(t["request"]["body_truncated"], true);
     assert_eq!(t["result"]["events"][0]["ip_override"], "[removed]");
+    assert_eq!(
+        t["result"]["events"][0]["x-sst-raw-hit"],
+        "v=2&en=page_view"
+    );
+    assert_eq!(
+        t["result"]["sends"][0]["url"],
+        "https://www.google-analytics.com/g/collect?v=2&en=page_view&_ua=UA"
+    );
     assert_eq!(t["result"]["logs"].as_array().unwrap().len(), 100);
     assert_eq!(t["result"]["logs"][0], "line 50");
 }
@@ -520,7 +534,6 @@ async fn the_console_routes_explain_and_audit() {
     let token = "t".repeat(32);
     let admin = Admin {
         pool: crate::server::Pool::for_tests(),
-        log: Default::default(),
         tenants: None,
         integrations: None,
         token: token.clone(),
@@ -723,7 +736,6 @@ async fn the_console_route_writes_and_previews_a_rule() {
     let token = "t".repeat(32);
     let admin = Admin {
         pool: crate::server::Pool::for_tests(),
-        log: Default::default(),
         tenants: None,
         integrations: None,
         token: token.clone(),
@@ -833,6 +845,16 @@ fn descriptions_with_secrets_are_refused() {
     ));
     assert!(!setup::looks_secret(
         "https://example.com/thanks for purchases"
+    ));
+    // A secret right after a colon or an equals sign is still one.
+    assert!(setup::looks_secret(
+        "Meta token:EAAGm0PX4ZCpsBAJZBZC1234567890abcdef"
+    ));
+    assert!(setup::looks_secret(
+        "access_token=EAAGm0PX4ZCpsBAJZBZC1234567890abcdef"
+    ));
+    assert!(!setup::looks_secret(
+        "purchases at https://shop.example.com/thanks?step=done, value: order total"
     ));
 }
 

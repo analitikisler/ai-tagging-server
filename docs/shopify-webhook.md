@@ -79,7 +79,7 @@ Each tag's behaviour for orders:
 
 1. In Shopify, open the webhook and click **Send test notification**. Test orders are signed, so the server checks the signature and answers 200, but does not run the tags (`shopify=test_order`). A 401 here means the signing secret is wrong.
 2. Place a real order, or wait for one. Its request should log `shopify=` followed by a result. A run with no `shopify=` line means the tags ran.
-3. Check the admin's recent events log and the counters on `/system`, which count skipped tags apart from successes and failures.
+3. Check **Live** in the console, where each order shows with the tags that ran, and the counters on `/system`, which count skipped tags apart from successes and failures.
 4. In Shopify, the webhook's delivery history shows each request and the status code the server returned. Anything other than 200 means the server refused the order: a 401 is a signing secret mismatch, and a 400 means the body wasn't an order.
 
 Shopify retries a delivery that fails, so the same order can arrive more than once. The server runs it only the first time within a day.

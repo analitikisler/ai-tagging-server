@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::sandbox::RunResult;
+use crate::sandbox::{RunResult, TagOutcome};
 use crate::state::{State, now_ms};
 
 pub const QUARTER_S: u64 = 900;
@@ -25,6 +25,8 @@ pub const KEYS: [&str; 4] = ["value", "currency", "transaction_id", "event_id"];
 const KEEP_DAYS: u64 = 35;
 /// Most event names counted per quarter and site; the rest count as `(other)`.
 const MAX_NAMES: usize = 300;
+/// Most characters of an event name kept.
+const MAX_NAME_LEN: usize = 100;
 /// Most distinct errors kept per host.
 const MAX_ERRORS: usize = 10;
 /// How often the current quarter is written while hits arrive.
@@ -35,6 +37,10 @@ pub struct Runs {
     pub runs: u64,
     /// Failed, threw or timed out.
     pub failed: u64,
+    /// Chose not to send (no consent, an event the platform doesn't use):
+    /// neither a failure nor a send.
+    #[serde(default)]
+    pub skipped: u64,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -79,7 +85,14 @@ impl Counts {
             self.unclaimed += 1;
         }
         for e in &r.events {
-            let mut name = e["event_name"].as_str().unwrap_or("(no name)").to_string();
+            // GA4 names are 40 characters at most; a hit can't make a key of
+            // any length here, which every later check would read again.
+            let mut name: String = e["event_name"]
+                .as_str()
+                .unwrap_or("(no name)")
+                .chars()
+                .take(MAX_NAME_LEN)
+                .collect();
             if self.events.len() >= MAX_NAMES && !self.events.contains_key(&name) {
                 name = "(other)".into();
             }
@@ -103,15 +116,19 @@ impl Counts {
         for t in &r.tags {
             let c = self.tags.entry(t.tag.clone()).or_default();
             c.runs += 1;
-            if t.outcome != "success" {
-                c.failed += 1;
+            match t.outcome {
+                TagOutcome::Success => {}
+                TagOutcome::Skipped => c.skipped += 1,
+                TagOutcome::Failure | TagOutcome::Timeout => c.failed += 1,
             }
         }
         for s in &r.sends {
             let c = self.hosts.entry(host_of(&s.url).to_string()).or_default();
             c.sends += 1;
+            if s.accepted() {
+                continue;
+            }
             let error = match &s.result {
-                Ok(status) if *status < 400 => continue,
                 Ok(status) => status.to_string(),
                 Err(e) => e.chars().take(80).collect(),
             };
@@ -142,6 +159,7 @@ impl Counts {
             let c = self.tags.entry(t.clone()).or_default();
             c.runs += r.runs;
             c.failed += r.failed;
+            c.skipped += r.skipped;
         }
         for (h, s) in &o.hosts {
             let c = self.hosts.entry(h.clone()).or_default();
@@ -349,7 +367,11 @@ mod tests {
             tags: vec![TagRun {
                 tag: "Meta".into(),
                 event: 0,
-                outcome: if tag_ok { "success" } else { "failure" },
+                outcome: if tag_ok {
+                    TagOutcome::Success
+                } else {
+                    TagOutcome::Failure
+                },
                 error: None,
                 skip: None,
             }],
@@ -378,13 +400,35 @@ mod tests {
             Ok(400),
         ));
         c.add(&RunResult::default());
-        assert_eq!(c.hits, 3);
+        // A tag that skipped its event didn't fail.
+        let mut skipped = hit(json!({ "event_name": "scroll" }), true, Ok(200));
+        skipped.tags[0].tag = "TikTok".into();
+        skipped.tags[0].outcome = TagOutcome::Skipped;
+        skipped.events.clear();
+        skipped.sends.clear();
+        c.add(&skipped);
+        assert_eq!(
+            c.tags["TikTok"],
+            Runs {
+                runs: 1,
+                failed: 0,
+                skipped: 1
+            }
+        );
+        assert_eq!(c.hits, 4);
         assert_eq!(c.unclaimed, 1);
         assert_eq!(c.events["purchase"], 2);
         assert_eq!(c.missing["purchase"]["value"], 1);
         assert_eq!(c.missing["purchase"]["currency"], 1);
         assert_eq!(c.missing["purchase"]["event_id"], 2);
-        assert_eq!(c.tags["Meta"], Runs { runs: 2, failed: 1 });
+        assert_eq!(
+            c.tags["Meta"],
+            Runs {
+                runs: 2,
+                failed: 1,
+                skipped: 0
+            }
+        );
         let h = &c.hosts["graph.facebook.com"];
         assert_eq!((h.sends, h.failed), (2, 1));
         assert_eq!(

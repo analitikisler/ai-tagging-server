@@ -101,6 +101,7 @@ fn tags_are_checked_for_settings_failures_and_idleness() {
         Runs {
             runs: 100,
             failed: 0,
+            skipped: 0,
         },
     );
     c.tags.insert(
@@ -108,6 +109,7 @@ fn tags_are_checked_for_settings_failures_and_idleness() {
         Runs {
             runs: 10,
             failed: 5,
+            skipped: 0,
         },
     );
     let failing_hit = json!({ "result": {
@@ -118,7 +120,7 @@ fn tags_are_checked_for_settings_failures_and_idleness() {
     let items = check(
         &container(tags),
         &c,
-        &[failing_hit],
+        &[Record::of(failing_hit)],
         Some(&json!({ "pixels": ["meta"] })),
     );
     assert!(has(&items, "hits", "ok"));
@@ -208,7 +210,7 @@ fn the_web_side_must_send_here() {
             hits: 1,
             ..Default::default()
         },
-        &[hit],
+        &[Record::of(hit)],
         Some(&web),
     );
     assert!(has(&items, "server_url_elsewhere", "bad"));
@@ -279,7 +281,9 @@ fn a_live_check_follows_one_browser_by_its_client_id() {
         if let (Some(m), Value::Object(x)) = (e.as_object_mut(), extra) {
             m.extend(x);
         }
-        json!({ "at": at, "result": { "events": [e], "tags": [{ "tag": "Meta", "event": 0, "outcome": "success" }], "sends": [{ "result": { "Ok": 200 } }, { "result": { "Err": "timed_out" } }] } })
+        Record::of(
+            json!({ "at": at, "result": { "events": [e], "tags": [{ "tag": "Meta", "event": 0, "outcome": "success" }], "sends": [{ "result": { "Ok": 200 } }, { "result": { "Err": "timed_out" } }] } }),
+        )
     };
     // Newest first, as the trace buffer lists them.
     let hits = vec![
@@ -353,7 +357,7 @@ fn a_test_conversion_gets_a_verdict_per_tag() {
     let waiting = live(
         "ab12cd34",
         0,
-        &[(1, landing.clone())],
+        &[(1, Record::of(landing.clone()))],
         &container,
         &BTreeSet::new(),
     );
@@ -382,7 +386,7 @@ fn a_test_conversion_gets_a_verdict_per_tag() {
     let v = live(
         "ab12cd34",
         0,
-        &[(2, buy), (1, landing)],
+        &[(2, Record::of(buy)), (1, Record::of(landing))],
         &container,
         &pixels,
     );

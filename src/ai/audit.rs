@@ -8,8 +8,12 @@
 //! figures the console shows never come from the model.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use serde_json::{Value, json};
+
+use crate::sandbox::RunKind;
+use crate::traces::Record;
 
 use super::{
     Ai, AiError, Ask, change_properties, language, parse_change, server_prompt, tag_names,
@@ -121,7 +125,7 @@ fn host_of(url: &str) -> &str {
 
 /// Counts `traces` (id and detail, as [`crate::traces::Traces::details`]
 /// gives them) for the tags of `container`.
-pub fn count(traces: &[(u64, Value)], container: &Value, retries: u64) -> Counts {
+pub fn count(traces: &[(u64, Arc<Record>)], container: &Value, retries: u64) -> Counts {
     let mut tags: BTreeMap<String, TagCount> = BTreeMap::new();
     for name in tag_names(container) {
         tags.entry(name.to_string()).or_default();
@@ -137,19 +141,15 @@ pub fn count(traces: &[(u64, Value)], container: &Value, retries: u64) -> Counts
     for (id, t) in traces {
         hits += 1;
         ids.insert(*id);
-        if let Some(at) = t["at"].as_u64() {
-            first = first.min(at);
-            last = last.max(at);
-        }
-        let r = &t["result"];
-        if r.is_null() {
+        first = first.min(t.at);
+        last = last.max(t.at);
+        let Some(r) = &t.result else {
             continue;
-        }
+        };
         ran += 1;
-        let names: Vec<String> = r["events"]
-            .as_array()
-            .into_iter()
-            .flatten()
+        let names: Vec<String> = r
+            .events
+            .iter()
             .map(|e| e["event_name"].as_str().unwrap_or("(no name)").to_string())
             .collect();
         for n in &names {
@@ -157,30 +157,29 @@ pub fn count(traces: &[(u64, Value)], container: &Value, retries: u64) -> Counts
         }
         // Each tag's runs in this hit, by event name.
         let mut runs_here: HashMap<String, BTreeMap<String, u64>> = HashMap::new();
-        for run in r["tags"].as_array().into_iter().flatten() {
-            let tag = run["tag"].as_str().unwrap_or_default().to_string();
-            let event = run["event"]
-                .as_u64()
-                .and_then(|i| names.get(i as usize))
+        for run in &r.tags {
+            let tag = run.tag.clone();
+            let event = names
+                .get(run.event)
                 .cloned()
                 .unwrap_or_else(|| "(no name)".into());
-            let error = run["error"].as_str();
-            let outcome = match (run["outcome"].as_str().unwrap_or_default(), error) {
-                ("failure", Some(_)) => "exception",
-                (o, _) => o,
-            };
+            let error = run.error.as_deref();
+            let kind = run.kind();
             let c = tags.entry(tag.clone()).or_default();
             c.runs += 1;
-            *c.outcomes.entry(outcome.to_string()).or_default() += 1;
+            *c.outcomes.entry(kind.as_str().to_string()).or_default() += 1;
             *c.fired_for.entry(event.clone()).or_default() += 1;
             if c.samples.len() < SAMPLES && !c.samples.contains(id) {
                 c.samples.push(*id);
             }
-            *runs_here
-                .entry(tag.clone())
-                .or_default()
-                .entry(event)
-                .or_default() += 1;
+            // A run that skipped its event sent nothing, so no send is its.
+            if kind != RunKind::Skipped {
+                *runs_here
+                    .entry(tag.clone())
+                    .or_default()
+                    .entry(event)
+                    .or_default() += 1;
+            }
             if let Some(e) = error {
                 let e: String = e.chars().take(200).collect();
                 errors.entry((tag, e)).or_default().add(*id);
@@ -188,26 +187,25 @@ pub fn count(traces: &[(u64, Value)], container: &Value, retries: u64) -> Counts
         }
         let mut senders: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut sent_here: HashMap<String, u64> = HashMap::new();
-        for s in r["sends"].as_array().into_iter().flatten() {
+        for s in &r.sends {
             sends_total += 1;
-            let from = s["from"].as_str().unwrap_or_default().to_string();
-            let host = host_of(s["url"].as_str().unwrap_or_default()).to_string();
-            let outcome = match (&s["result"]["Ok"], &s["result"]["Err"]) {
-                (Value::Number(n), _) => n.as_u64().map(|n| (n < 400, n.to_string())),
-                (_, Value::String(e)) => Some((false, e.chars().take(120).collect())),
-                _ => None,
-            };
+            let from = s.from.clone();
+            let host = host_of(&s.url).to_string();
             let c = tags.entry(from.clone()).or_default();
             c.sends += 1;
             *sent_here.entry(from.clone()).or_default() += 1;
-            if let Some((false, result)) = outcome {
+            if !s.accepted() {
+                let result: String = match &s.result {
+                    Ok(status) => status.to_string(),
+                    Err(e) => e.chars().take(120).collect(),
+                };
                 c.sends_failed += 1;
                 let g = failing
                     .entry((from.clone(), host.clone(), result))
                     .or_default();
                 g.add(*id);
                 if g.detail.is_none() {
-                    g.detail = s["detail"].as_str().map(|d| d.chars().take(300).collect());
+                    g.detail = s.detail.as_ref().map(|d| d.chars().take(300).collect());
                 }
             }
             senders.entry(host).or_default().insert(from);
@@ -345,7 +343,7 @@ impl Counts {
 /// process's send retries so far.
 pub async fn audit(
     ai: &Ai,
-    traces: &[(u64, Value)],
+    traces: &[(u64, Arc<Record>)],
     container: &Value,
     retries: u64,
     lang: Option<&str>,

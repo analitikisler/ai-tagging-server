@@ -10,20 +10,12 @@
 const generateRandom = require('generateRandom');
 const API = 'https://ads-api.twitter.com/12/measurement/conversions/';
 
-if (
-  !data.pixel_id ||
-  !data.event_ids ||
-  !data.consumer_key ||
-  !data.consumer_secret ||
-  !data.access_token ||
-  !data.access_token_secret
-) {
-  data.gtmOnFailure();
+if (missing(['pixel_id', 'event_ids', 'consumer_key', 'consumer_secret', 'access_token', 'access_token_secret'])) {
   return;
 }
 
 const eventName = getEventData('event_name');
-const xEvent = eventMap(data.event_ids)[eventName];
+const xEvent = mapped(eventMap(data.event_ids), eventName);
 if (!xEvent) {
   skip('unmapped_event');
   return;
@@ -195,7 +187,7 @@ fetchExtra((x) => {
   if (twclid) identifiers.push({ twclid: twclid });
   const email = hash(x.email);
   if (email) identifiers.push({ hashed_email: email });
-  const phone = hashPhone(x.phone);
+  const phone = hashPhoneE164(x.phone);
   if (phone) identifiers.push({ hashed_phone_number: phone });
   if (!identifiers.length) {
     skip('no_user_id');

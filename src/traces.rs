@@ -8,14 +8,15 @@
 //! digests are kept.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use serde_json::{Map, Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::mpv2::RAW_HIT_KEY;
 use crate::request::IncomingRequest;
-use crate::sandbox::RunResult;
+use crate::sandbox::{RunKind, RunResult};
 
 pub const DEFAULT_CAPACITY: usize = 200;
 pub const MAX_CAPACITY: usize = 2000;
@@ -52,8 +53,101 @@ struct Trace {
     tenant: Option<String>,
     /// Lower-case text `q` is matched against.
     search: String,
-    summary: Map<String, Value>,
-    detail: Map<String, Value>,
+    summary: Summary,
+    /// Shared with whoever reads it, so nothing is copied while the ring is
+    /// locked.
+    record: Arc<Record>,
+}
+
+/// The request as a trace keeps it: see [`capture`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Captured {
+    pub method: String,
+    pub path: String,
+    pub query: String,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+    pub body_truncated: bool,
+    pub remote_address: String,
+}
+
+/// One hit as the debugger keeps it. The setup check, the AI audit and the
+/// change check read hits through this, by field, not by name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Record {
+    /// When it was recorded, in milliseconds since 1970.
+    pub at: u64,
+    pub tenant: Option<String>,
+    pub duration_ms: f64,
+    pub status: u16,
+    /// Why it was answered before any template ran.
+    pub error: Option<String>,
+    /// What the run did, with plain user data masked. None for a hit
+    /// answered before any template ran.
+    pub result: Option<RunResult>,
+    pub request: Captured,
+}
+
+impl Captured {
+    /// The request again, as far as a trace kept it, to run it once more.
+    pub fn to_request(&self) -> IncomingRequest {
+        IncomingRequest {
+            method: self.method.clone(),
+            path: self.path.clone(),
+            query: self.query.clone(),
+            headers: self.headers.clone(),
+            body: self.body.clone(),
+            remote_address: self.remote_address.clone(),
+        }
+    }
+}
+
+impl Record {
+    /// A record from the JSON a trace is shown as, for tests that describe a
+    /// hit by what matters to them.
+    #[cfg(test)]
+    pub fn of(v: Value) -> Arc<Record> {
+        Arc::new(serde_json::from_value(v).expect("a trace record"))
+    }
+
+    /// The events of the run, none when no template ran.
+    pub fn events(&self) -> &[Value] {
+        self.result.as_ref().map_or(&[], |r| &r.events)
+    }
+}
+
+/// One row of the hit list.
+#[derive(Debug, Serialize)]
+struct Summary {
+    at: u64,
+    tenant: Option<String>,
+    method: String,
+    path: String,
+    duration_ms: f64,
+    status: u16,
+    client: Option<String>,
+    client_error: Option<String>,
+    error: Option<String>,
+    events: Vec<String>,
+    tags: Tally,
+    tag_runs: Vec<RunSummary>,
+    sends: SendTally,
+    has_error: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct RunSummary {
+    tag: String,
+    event: usize,
+    outcome: RunKind,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct SendTally {
+    ok: usize,
+    failed: usize,
 }
 
 /// How a hit ended.
@@ -98,123 +192,103 @@ impl Traces {
     pub fn record(
         &self,
         tenant: Option<&str>,
-        request: Value,
+        request: Captured,
         elapsed: Duration,
         outcome: Outcome<'_>,
     ) {
         if !self.is_on() {
             return;
         }
-        let at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64);
+        let at = crate::state::now_ms();
         let duration_ms = (elapsed.as_secs_f64() * 1e6).round() / 1e3;
-        let text = |k: &str| request[k].as_str().unwrap_or_default().to_string();
-        let (method, path) = (text("method"), text("path"));
-        let mut search = vec![path.clone()];
-
-        let mut summary = Map::new();
-        summary.insert("at".into(), json!(at));
-        summary.insert("tenant".into(), json!(tenant));
-        summary.insert("method".into(), json!(method));
-        summary.insert("path".into(), json!(path));
-        summary.insert("duration_ms".into(), json!(duration_ms));
-        let mut detail = Map::new();
-        detail.insert("at".into(), json!(at));
-        detail.insert("tenant".into(), json!(tenant));
-        detail.insert("duration_ms".into(), json!(duration_ms));
+        let tenant = tenant.map(str::to_string);
+        let mut search = vec![request.path.clone()];
+        let mut summary = Summary {
+            at,
+            tenant: tenant.clone(),
+            method: request.method.clone(),
+            path: request.path.clone(),
+            duration_ms,
+            status: 0,
+            client: None,
+            client_error: None,
+            error: None,
+            events: Vec::new(),
+            tags: Tally::default(),
+            tag_runs: Vec::new(),
+            sends: SendTally::default(),
+            has_error: true,
+        };
+        let mut record = Record {
+            at,
+            tenant: tenant.clone(),
+            duration_ms,
+            status: 0,
+            error: None,
+            result: None,
+            request,
+        };
 
         match outcome {
             Outcome::Refused { status, error } => {
                 search.push(error.to_string());
-                summary.extend([
-                    ("status".into(), json!(status)),
-                    ("client".into(), Value::Null),
-                    ("client_error".into(), Value::Null),
-                    ("error".into(), json!(error)),
-                    ("events".into(), json!([])),
-                    (
-                        "tags".into(),
-                        json!({"success": 0, "failure": 0, "timeout": 0, "exception": 0}),
-                    ),
-                    ("tag_runs".into(), json!([])),
-                    ("sends".into(), json!({"ok": 0, "failed": 0})),
-                    ("has_error".into(), json!(true)),
-                ]);
-                detail.insert("status".into(), json!(status));
-                detail.insert("error".into(), json!(error));
-                detail.insert("result".into(), Value::Null);
+                summary.status = status;
+                summary.error = Some(error.to_string());
+                record.status = status;
+                record.error = Some(error.to_string());
             }
             Outcome::Ran(r) => {
-                let names: Vec<&str> = r
+                summary.events = r
                     .events
                     .iter()
-                    .map(|e| e["event_name"].as_str().unwrap_or_default())
+                    .map(|e| e["event_name"].as_str().unwrap_or_default().to_string())
                     .collect();
-                search.extend(names.iter().map(|n| n.to_string()));
+                search.extend(summary.events.iter().cloned());
                 search.extend(r.claimed_by.iter().cloned());
                 search.extend(r.client_error.iter().cloned());
-                let (mut success, mut failure, mut timeout, mut exception) = (0, 0, 0, 0);
-                let mut runs = Vec::with_capacity(r.tags.len());
                 for t in &r.tags {
                     // A tag that threw keeps the error; one that failed on its own has none.
-                    let outcome = match (t.outcome, &t.error) {
-                        ("failure", Some(_)) => "exception",
-                        (o, _) => o,
-                    };
-                    match outcome {
-                        "success" => success += 1,
-                        "failure" => failure += 1,
-                        "exception" => exception += 1,
-                        _ => timeout += 1,
-                    }
-                    runs.push(json!({"tag": t.tag, "event": t.event, "outcome": outcome}));
+                    let kind = t.kind();
+                    summary.tags.add(kind);
+                    summary.tag_runs.push(RunSummary {
+                        tag: t.tag.clone(),
+                        event: t.event,
+                        outcome: kind,
+                    });
                     search.push(t.tag.clone());
                     search.extend(t.error.iter().cloned());
                 }
                 let mut ok = 0;
                 for s in &r.sends {
-                    match &s.result {
-                        Ok(status) if *status < 400 => ok += 1,
-                        Ok(_) => {}
-                        Err(e) => search.push(e.clone()),
+                    if s.accepted() {
+                        ok += 1;
+                    } else if let Err(e) = &s.result {
+                        search.push(e.clone());
                     }
                     search.push(host_of(&s.url).to_string());
                 }
                 let failed = r.sends.len() - ok;
-                let has_error = r.client_error.is_some()
-                    || success != r.tags.len()
+                summary.sends = SendTally { ok, failed };
+                summary.has_error = r.client_error.is_some()
+                    || summary.tags.went_wrong() > 0
                     || failed > 0
                     || r.response.status >= 500;
-                summary.extend([
-                    ("status".into(), json!(r.response.status)),
-                    ("client".into(), json!(r.claimed_by)),
-                    ("client_error".into(), json!(r.client_error)),
-                    ("error".into(), Value::Null),
-                    ("events".into(), json!(names)),
-                    (
-                        "tags".into(),
-                        json!({"success": success, "failure": failure, "timeout": timeout, "exception": exception}),
-                    ),
-                    ("tag_runs".into(), Value::Array(runs)),
-                    ("sends".into(), json!({"ok": ok, "failed": failed})),
-                    ("has_error".into(), json!(has_error)),
-                ]);
-                detail.insert("status".into(), json!(r.response.status));
-                detail.insert("error".into(), Value::Null);
-                let mut result = serde_json::to_value(r).unwrap_or(Value::Null);
-                mask_result(&mut result);
-                detail.insert("result".into(), result);
+                summary.status = r.response.status;
+                summary.client = r.claimed_by.clone();
+                summary.client_error = r.client_error.clone();
+                record.status = r.response.status;
+                let mut run = r.clone();
+                mask_run(&mut run);
+                record.result = Some(run);
             }
         }
-        detail.insert("request".into(), request);
 
         let mut trace = Trace {
             id: 0,
-            tenant: tenant.map(str::to_string),
+            tenant,
             search: search.join("\n").to_lowercase(),
             summary,
-            detail,
+            record: Arc::new(record),
         };
         let mut ring = self.ring.lock().expect("traces");
         ring.last += 1;
@@ -248,10 +322,10 @@ impl Traces {
         (out, ring.last)
     }
 
-    pub fn get(&self, id: u64) -> Option<Value> {
+    pub fn get(&self, id: u64) -> Option<Arc<Record>> {
         let ring = self.ring.lock().expect("traces");
         let at = ring.items.binary_search_by_key(&id, |t| t.id).ok()?;
-        Some(with_id(id, &ring.items[at].detail))
+        Some(ring.items[at].record.clone())
     }
 
     /// The events of every hit that ran, newest first, with their trace ids.
@@ -262,22 +336,32 @@ impl Traces {
             .iter()
             .rev()
             .filter(|t| tenant.is_none() || t.tenant.as_deref() == tenant)
-            .filter_map(|t| {
-                let events = t.detail.get("result")?.get("events")?.as_array()?;
-                Some((t.id, events.clone()))
-            })
+            .filter_map(|t| Some((t.id, t.record.result.as_ref()?.events.clone())))
             .collect()
     }
 
     /// Every hit's id and full record, newest first. `tenant` keeps one
     /// tenant's hits only.
-    pub fn details(&self, tenant: Option<&str>) -> Vec<(u64, Value)> {
+    pub fn details(&self, tenant: Option<&str>) -> Vec<(u64, Arc<Record>)> {
+        self.details_where(tenant, usize::MAX, |_| true)
+    }
+
+    /// The same, but only the hits `keep` wants and `limit` of them at
+    /// most.
+    pub fn details_where(
+        &self,
+        tenant: Option<&str>,
+        limit: usize,
+        keep: impl Fn(&Record) -> bool,
+    ) -> Vec<(u64, Arc<Record>)> {
         let ring = self.ring.lock().expect("traces");
         ring.items
             .iter()
             .rev()
             .filter(|t| tenant.is_none() || t.tenant.as_deref() == tenant)
-            .map(|t| (t.id, Value::Object(t.detail.clone())))
+            .filter(|t| keep(&t.record))
+            .take(limit)
+            .map(|t| (t.id, t.record.clone()))
             .collect()
     }
 
@@ -296,10 +380,11 @@ impl Traces {
     }
 }
 
-fn with_id(id: u64, fields: &Map<String, Value>) -> Value {
-    let mut m = fields.clone();
-    m.insert("id".into(), json!(id));
-    Value::Object(m)
+/// A row or a record as the API gives it: its fields and its id.
+pub fn with_id(id: u64, fields: &impl Serialize) -> Value {
+    let mut v = serde_json::to_value(fields).unwrap_or_default();
+    v["id"] = json!(id);
+    v
 }
 
 /// The host of a URL, or the URL itself when it has none.
@@ -310,7 +395,7 @@ fn host_of(url: &str) -> &str {
 
 /// The request as a trace keeps it: secret headers redacted, cookies reduced
 /// to their names, and the body cut to 16 KB.
-pub fn capture(req: &IncomingRequest) -> Value {
+pub fn capture(req: &IncomingRequest) -> Captured {
     let headers: Vec<(String, String)> = req
         .headers
         .iter()
@@ -325,20 +410,85 @@ pub fn capture(req: &IncomingRequest) -> Value {
             (k.clone(), v)
         })
         .collect();
-    let mut cut = req.body.len().min(MAX_BODY);
-    while !req.body.is_char_boundary(cut) {
+    // A JSON body (an order webhook) can hold a name, an address or an
+    // e-mail under any key, so only its shape is kept. A form body keeps
+    // everything but the plain user data.
+    let whole = match json_shape(&req.body) {
+        Some(shape) => shape,
+        None => req
+            .body
+            .split('\n')
+            .map(mask_params)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    let mut cut = whole.len().min(MAX_BODY);
+    while !whole.is_char_boundary(cut) {
         cut -= 1;
     }
-    let body: Vec<String> = req.body[..cut].split('\n').map(mask_params).collect();
-    json!({
-        "method": req.method,
-        "path": req.path,
-        "query": mask_params(&req.query),
-        "headers": headers,
-        "body": body.join("\n"),
-        "body_truncated": cut < req.body.len(),
-        "remote_address": req.remote_address,
-    })
+    Captured {
+        method: req.method.clone(),
+        path: req.path.clone(),
+        query: mask_params(&req.query),
+        headers,
+        body: whole[..cut].to_string(),
+        body_truncated: cut < whole.len(),
+        remote_address: req.remote_address.clone(),
+    }
+}
+
+/// A JSON body with every value taken out: the keys and the kinds of value
+/// stay, so the debugger still shows what arrived. None for a body that
+/// isn't JSON. One that starts like JSON but doesn't parse is not kept at
+/// all, since nothing in it can be told apart.
+fn json_shape(body: &str) -> Option<String> {
+    let text = body.trim_start();
+    if !text.starts_with('{') && !text.starts_with('[') {
+        return None;
+    }
+    fn shape(v: &mut Value) {
+        match v {
+            Value::Object(m) => m.values_mut().for_each(shape),
+            Value::Array(a) => a.iter_mut().for_each(shape),
+            Value::String(_) => *v = json!("[text]"),
+            Value::Number(_) => *v = json!("[number]"),
+            Value::Bool(_) | Value::Null => {}
+        }
+    }
+    match serde_json::from_str::<Value>(text) {
+        Ok(mut v) => {
+            shape(&mut v);
+            Some(v.to_string())
+        }
+        Err(_) => Some(format!("[{} bytes, not kept]", body.len())),
+    }
+}
+
+/// How many of a hit's tag runs ended each way, as the hit list shows them.
+#[derive(Debug, Default, Serialize)]
+struct Tally {
+    success: u32,
+    failure: u32,
+    timeout: u32,
+    exception: u32,
+    skipped: u32,
+}
+
+impl Tally {
+    fn add(&mut self, kind: RunKind) {
+        *match kind {
+            RunKind::Success => &mut self.success,
+            RunKind::Failure => &mut self.failure,
+            RunKind::Timeout => &mut self.timeout,
+            RunKind::Exception => &mut self.exception,
+            RunKind::Skipped => &mut self.skipped,
+        } += 1;
+    }
+
+    /// Runs that failed, threw or timed out.
+    fn went_wrong(&self) -> u32 {
+        self.failure + self.timeout + self.exception
+    }
 }
 
 /// Headers that carry the visitor's IP address.
@@ -361,10 +511,11 @@ const AI_LOGS: usize = 100;
 const AI_LOG_LINE: usize = 500;
 
 /// A trace as the AI is given it: on top of what every trace already hides,
-/// the visitor's IP address is removed from the headers, the event data and
-/// the query, the body is cut to 8 KB and the logs to the last 100 lines.
-pub fn for_ai(detail: &Value) -> Value {
-    let mut t = detail.clone();
+/// the visitor's IP address is removed from the headers, the event data,
+/// the query and the sends' addresses, the body is cut to 8 KB and the logs
+/// to the last 100 lines.
+pub fn for_ai(record: &Record) -> Value {
+    let mut t = serde_json::to_value(record).unwrap_or_default();
     let req = &mut t["request"];
     if let Some(m) = req.as_object_mut() {
         m.remove("remote_address");
@@ -407,6 +558,20 @@ pub fn for_ai(detail: &Value) -> Value {
     }
     if let Some(events) = t["result"].get_mut("events") {
         drop_keys(events, IP_KEYS);
+        // The hit as the browser sent it rides along with each event.
+        for e in events.as_array_mut().into_iter().flatten() {
+            if let Some(Value::String(raw)) = e.get_mut(crate::mpv2::RAW_HIT_KEY) {
+                *raw = drop_params(raw, IP_KEYS);
+            }
+        }
+    }
+    // The GA4 tag forwards the visitor's IP to Google as `_uip`.
+    for s in t["result"]["sends"].as_array_mut().into_iter().flatten() {
+        if let Some(Value::String(url)) = s.get_mut("url")
+            && let Some((base, query)) = url.split_once('?')
+        {
+            *url = format!("{base}?{}", drop_params(query, IP_KEYS));
+        }
     }
     t
 }
@@ -529,40 +694,54 @@ fn envelope_part_ok(part: &str) -> bool {
 /// Masks plain user data in a run record: the events (and the raw hit each
 /// keeps), the values firing conditions were compared with, and the query
 /// of forwarded URLs. Used for traces and the `__debug` report.
-pub fn mask_result(result: &mut Value) {
-    if let Some(events) = result.get_mut("events").and_then(Value::as_array_mut) {
-        for ev in events {
-            if let Some(u) = ev.get_mut("user_data") {
+pub fn mask_run(run: &mut RunResult) {
+    for ev in &mut run.events {
+        if let Some(u) = ev.get_mut("user_data") {
+            // `ep.user_data=jane@example.com` makes it a plain string.
+            if u.is_string() || u.is_number() {
+                *u = json!(MASKED);
+            } else {
                 mask_user_data(u);
             }
-            if let Some(Value::String(raw)) = ev.get_mut(RAW_HIT_KEY) {
-                *raw = mask_params(raw);
-            }
+        }
+        if let Some(Value::String(raw)) = ev.get_mut(RAW_HIT_KEY) {
+            *raw = mask_params(raw);
         }
     }
-    if let Some(triggers) = result.get_mut("triggers").and_then(Value::as_array_mut) {
-        for c in triggers
-            .iter_mut()
-            .filter_map(|t| t.get_mut("conditions").and_then(Value::as_array_mut))
-            .flatten()
-        {
-            let key = c["key"].as_str().unwrap_or_default();
-            let user = key == "user_data" || key.starts_with("user_data.");
-            let last = key.rsplit('.').next().unwrap_or(key);
-            if user && (key == "user_data" || plain_user_field(last)) && c["actual"].is_string() {
-                c["actual"] = json!(MASKED);
-            }
+    for c in run.triggers.iter_mut().flat_map(|t| &mut t.conditions) {
+        let user = c.key == "user_data" || c.key.starts_with("user_data.");
+        let last = c.key.rsplit('.').next().unwrap_or(&c.key);
+        if user && (c.key == "user_data" || plain_user_field(last)) && c.actual.is_some() {
+            c.actual = Some(MASKED.to_string());
         }
     }
-    if let Some(sends) = result.get_mut("sends").and_then(Value::as_array_mut) {
-        for s in sends {
-            if let Some(Value::String(url)) = s.get_mut("url")
-                && let Some((base, query)) = url.split_once('?')
+    for s in &mut run.sends {
+        if let Some((base, query)) = s.url.split_once('?') {
+            s.url = format!("{base}?{}", hide_secret_params(&mask_params(query)));
+        }
+    }
+}
+
+/// Hides the value of a send's query parameter whose name says it holds a
+/// secret (Snapchat's `access_token`, an API `key`), so no trace, debug
+/// report or AI prompt carries it. The hit's own event and user parameters
+/// are left as sent.
+fn hide_secret_params(query: &str) -> String {
+    query
+        .split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((k, _))
+                if !["ep.", "epn.", "up.", "upn."]
+                    .iter()
+                    .any(|p| k.starts_with(p))
+                    && (k == "key" || crate::admin::secret_name(k)) =>
             {
-                *url = format!("{base}?{}", mask_params(query));
+                format!("{k}=[redacted]")
             }
-        }
-    }
+            _ => pair.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// `_ga=GA1.1.1; _fbp=fb.1.2` becomes `_ga, _fbp`.
@@ -580,9 +759,14 @@ fn cookie_names(header: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sandbox::{SendRecord, TagRun};
+    use crate::sandbox::{SendRecord, TagOutcome, TagRun};
 
-    fn hit(path: &str) -> Value {
+    /// A kept hit as the API gives it.
+    fn shown(t: &Traces, id: u64) -> Value {
+        with_id(id, &*t.get(id).unwrap())
+    }
+
+    fn hit(path: &str) -> Captured {
         capture(&IncomingRequest {
             method: "GET".into(),
             path: path.into(),
@@ -611,7 +795,7 @@ mod tests {
         assert_eq!(ids, [5, 4, 3]);
         assert_eq!(all[0]["path"], "/p4");
         assert!(t.get(2).is_none());
-        assert_eq!(t.get(4).unwrap()["request"]["path"], "/p3");
+        assert_eq!(shown(&t, 4)["request"]["path"], "/p3");
         t.clear();
         assert!(t.list(&Filter::default()).0.is_empty());
         ran(&t, "/again", None);
@@ -689,9 +873,9 @@ mod tests {
             claimed_by: Some("GA4".into()),
             events: vec![json!({"event_name": "purchase"})],
             tags: vec![
-                tag("GA4", "success", None),
-                tag("Meta Conversions API", "failure", None),
-                tag("Broken", "failure", Some("x is not defined")),
+                tag("GA4", TagOutcome::Success, None),
+                tag("Meta Conversions API", TagOutcome::Failure, None),
+                tag("Broken", TagOutcome::Failure, Some("x is not defined")),
             ],
             sends: vec![SendRecord {
                 from: "GA4".into(),
@@ -718,9 +902,33 @@ mod tests {
         let s = &all[1];
         assert_eq!(
             s["tags"],
-            json!({"success": 1, "failure": 1, "timeout": 0, "exception": 1})
+            json!({"success": 1, "failure": 1, "timeout": 0, "exception": 1, "skipped": 0})
         );
         assert_eq!(s["tag_runs"][2]["outcome"], "exception");
+
+        // A tag that skipped its event (no consent) is neither a success nor
+        // an error.
+        let skipped = RunResult {
+            claimed_by: Some("GA4".into()),
+            events: vec![json!({"event_name": "page_view"})],
+            tags: vec![
+                tag("GA4", TagOutcome::Success, None),
+                tag("TikTok Events API", TagOutcome::Skipped, None),
+            ],
+            ..Default::default()
+        };
+        t.record(
+            None,
+            hit("/g/collect"),
+            Duration::ZERO,
+            Outcome::Ran(&skipped),
+        );
+        let (newest, _) = t.list(&Filter::default());
+        assert_eq!(
+            newest[0]["tags"],
+            json!({"success": 1, "failure": 0, "timeout": 0, "exception": 0, "skipped": 1})
+        );
+        assert_eq!(newest[0]["has_error"], false);
         assert_eq!(s["sends"], json!({"ok": 0, "failed": 1}));
         assert_eq!(s["events"], json!(["purchase"]));
         assert_eq!(s["has_error"], true);
@@ -731,7 +939,7 @@ mod tests {
             };
             assert_eq!(t.list(&f).0.len(), 1, "{q}");
         }
-        assert_eq!(t.get(1).unwrap()["result"]["claimed_by"], "GA4");
+        assert_eq!(shown(&t, 1)["result"]["claimed_by"], "GA4");
     }
 
     #[test]
@@ -768,7 +976,7 @@ mod tests {
         };
         let t = Traces::new(5);
         t.record(None, capture(&req), Duration::ZERO, Outcome::Ran(&r));
-        let d = t.get(1).unwrap();
+        let d = shown(&t, 1);
         let text = d.to_string();
         for plain in ["jane", "Jane", "berlin", "4917012"] {
             assert!(!text.contains(plain), "{plain} in {text}");
@@ -827,7 +1035,7 @@ mod tests {
             body: "é".repeat(MAX_BODY),
             ..Default::default()
         };
-        let v = capture(&req);
+        let v = json!(capture(&req));
         let h = &v["headers"];
         assert_eq!(h[0], json!(["cookie", "_ga, _fbp, other"]));
         for i in 1..4 {
@@ -836,5 +1044,48 @@ mod tests {
         assert_eq!(h[4][1], "Mozilla");
         assert_eq!(v["body"].as_str().unwrap().len(), MAX_BODY);
         assert_eq!(v["body_truncated"], true);
+    }
+
+    #[test]
+    fn a_json_body_keeps_its_shape_and_none_of_its_values() {
+        let req = IncomingRequest {
+            method: "POST".into(),
+            path: "/shopify/orders".into(),
+            body: r#"{"id":820982911946154508,"email":"jane@example.com","test":false,
+                "customer":{"first_name":"Jane","phone":"+491701234567"},
+                "line_items":[{"title":"Shirt","price":"19.90"}],"note":null}"#
+                .into(),
+            ..Default::default()
+        };
+        let v = json!(capture(&req));
+        let body = v["body"].as_str().unwrap();
+        for plain in [
+            "jane@example.com",
+            "Jane",
+            "+491701234567",
+            "820982911946154508",
+        ] {
+            assert!(!body.contains(plain), "{plain}: {body}");
+        }
+        assert_eq!(
+            serde_json::from_str::<Value>(body).unwrap(),
+            json!({"id": "[number]", "email": "[text]", "test": false,
+                "customer": {"first_name": "[text]", "phone": "[text]"},
+                "line_items": [{"title": "[text]", "price": "[text]"}], "note": null})
+        );
+        // What only looks like JSON is not kept at all.
+        let broken = IncomingRequest {
+            body: r#"{"email":"jane@example.com""#.into(),
+            ..Default::default()
+        };
+        assert_eq!(json!(capture(&broken))["body"], "[27 bytes, not kept]");
+
+        // A plain string where the user data object should be is masked too.
+        let mut run = RunResult {
+            events: vec![json!({ "user_data": "jane@example.com" })],
+            ..Default::default()
+        };
+        mask_run(&mut run);
+        assert_eq!(run.events[0]["user_data"], MASKED);
     }
 }

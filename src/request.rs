@@ -36,7 +36,9 @@ pub fn remote_address(headers: &[(String, String)], socket_ip: &str) -> String {
     find("cf-connecting-ip")
         .or_else(|| find("x-real-ip"))
         .or_else(|| {
-            find("x-forwarded-for").and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
+            find("x-forwarded-for")
+                .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
+                .filter(|v| !v.is_empty())
         })
         .unwrap_or_else(|| socket_ip.to_string())
 }
@@ -119,6 +121,11 @@ mod tests {
             "1.1.1.1"
         );
         assert_eq!(remote_address(&[], "9.9.9.9"), "9.9.9.9");
+        // An empty first entry is no address.
+        assert_eq!(
+            remote_address(&h(&[("x-forwarded-for", ", 2.2.2.2")]), "9.9.9.9"),
+            "9.9.9.9"
+        );
     }
 
     #[test]

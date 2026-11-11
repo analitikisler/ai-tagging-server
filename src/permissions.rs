@@ -285,7 +285,10 @@ pub fn check_template(src: &str, permissions: Option<&Permissions>) -> Result<()
         let Some(Argument::StringLiteral(lit)) = call.arguments.first() else {
             return Err(format!("line {line}: require() needs a literal API name"));
         };
-        let api = lit.value.as_str();
+        // A literal that isn't valid text (a lone surrogate) names no API.
+        let Some(api) = lit.value.as_str() else {
+            return Err(format!("line {line}: require() needs a literal API name"));
+        };
         let Some(perm) = table.get(api) else {
             return Err(format!("line {line}: require('{api}'): no such API"));
         };

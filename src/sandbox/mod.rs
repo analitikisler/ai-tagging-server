@@ -14,13 +14,14 @@ pub(crate) use host::bigquery_insert_url;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use rquickjs::module::WriteOptions;
 use rquickjs::{Context, Ctx, Function, Module, Object, Persistent, Runtime, Value as JsValue};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::container::{Container, Trigger};
 
@@ -74,7 +75,8 @@ pub trait Transport: Send + Sync {
     fn send_all(&self, requests: Vec<Outgoing>) -> Vec<Result<SendResult, String>>;
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Response {
     pub status: u16,
     pub headers: Vec<(String, String)>,
@@ -83,7 +85,9 @@ pub struct Response {
 }
 
 /// What happened during a run: the response, plus what the debug view shows.
-#[derive(Debug, Default, Serialize)]
+/// It can be read back, since a trace keeps one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RunResult {
     pub claimed_by: Option<String>,
     pub client_error: Option<String>,
@@ -98,21 +102,125 @@ pub struct RunResult {
     pub triggers: Vec<Trigger>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// How a tag's run ended. Every place that counts or shows runs matches on
+/// this, so an ending added here can't be left out of one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TagOutcome {
+    /// The tag called `gtmOnSuccess`.
+    Success,
+    /// It called `gtmOnFailure`, or threw; then the run has an `error`.
+    Failure,
+    /// It called `gtmOnSkipped`: it chose not to send, and `skip` says why.
+    Skipped,
+    /// It reported nothing before the run ended.
+    Timeout,
+}
+
+impl TagOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TagOutcome::Success => "success",
+            TagOutcome::Failure => "failure",
+            TagOutcome::Skipped => "skipped",
+            TagOutcome::Timeout => "timeout",
+        }
+    }
+
+    /// Whether the run went wrong. One that skipped its event (no consent,
+    /// an event the platform doesn't use) did what it should.
+    pub fn went_wrong(self) -> bool {
+        match self {
+            TagOutcome::Success | TagOutcome::Skipped => false,
+            TagOutcome::Failure | TagOutcome::Timeout => true,
+        }
+    }
+
+    /// From what a tag reported: `done` is true for `gtmOnSuccess`, false
+    /// for `gtmOnFailure` and None when it reported nothing; `skipped`
+    /// whether it called `gtmOnSkipped`.
+    fn reported(done: Option<bool>, skipped: bool) -> Self {
+        match done {
+            Some(true) if skipped => TagOutcome::Skipped,
+            Some(true) => TagOutcome::Success,
+            Some(false) => TagOutcome::Failure,
+            None => TagOutcome::Timeout,
+        }
+    }
+}
+
+impl std::fmt::Display for TagOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A run as people are shown it: a failure that threw is told apart from
+/// one the tag reported itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunKind {
+    Success,
+    Failure,
+    Exception,
+    Skipped,
+    Timeout,
+}
+
+impl RunKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunKind::Success => "success",
+            RunKind::Failure => "failure",
+            RunKind::Exception => "exception",
+            RunKind::Skipped => "skipped",
+            RunKind::Timeout => "timeout",
+        }
+    }
+
+    /// The status `addEventCallback` reports for the run. sGTM has no word
+    /// for a skipped run, so it reads as a success there.
+    fn sgtm_status(self) -> &'static str {
+        match self {
+            RunKind::Success | RunKind::Skipped => "success",
+            RunKind::Failure => "failure",
+            RunKind::Exception => "exception",
+            RunKind::Timeout => "timeout",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagRun {
     pub tag: String,
+    #[serde(default)]
     pub event: usize,
-    pub outcome: &'static str,
+    pub outcome: TagOutcome,
     pub error: Option<String>,
-    /// Why a tag chose not to send (`outcome` is then "skipped").
+    /// Why a tag chose not to send (`outcome` is then `Skipped`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skip: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl TagRun {
+    pub fn kind(&self) -> RunKind {
+        match (self.outcome, &self.error) {
+            (TagOutcome::Success, _) => RunKind::Success,
+            (TagOutcome::Failure, Some(_)) => RunKind::Exception,
+            (TagOutcome::Failure, None) => RunKind::Failure,
+            (TagOutcome::Skipped, _) => RunKind::Skipped,
+            (TagOutcome::Timeout, _) => RunKind::Timeout,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendRecord {
+    #[serde(default)]
     pub from: String,
+    #[serde(default)]
     pub method: String,
+    #[serde(default)]
     pub url: String,
     pub result: Result<u16, String>,
     /// The start of the answer when the vendor refused the send, so a wrong
@@ -124,7 +232,20 @@ pub struct SendRecord {
     pub detail: Option<String>,
 }
 
+impl SendRecord {
+    /// Whether the platform took the send: it answered, and not with an
+    /// error status.
+    pub fn accepted(&self) -> bool {
+        self.result.as_ref().is_ok_and(|status| *status < 400)
+    }
+}
+
 pub type Storage = Arc<Mutex<HashMap<String, HashMap<String, String>>>>;
+
+/// Compiled templates by a digest of their name and source, shared by every
+/// runtime in the process.
+static COMPILED: LazyLock<Mutex<HashMap<[u8; 32], &'static [u8]>>> =
+    LazyLock::new(Default::default);
 
 pub struct Engine {
     rt: Runtime,
@@ -245,15 +366,43 @@ impl Engine {
             // live for the rest of the process.
             Some(bytes) => unsafe { Module::load(ctx.clone(), bytes)? },
             None => {
-                let m = Module::declare(ctx.clone(), key, format!("export default {expr};"))?;
-                let bytes = m.write(WriteOptions {
-                    strip_debug: true,
-                    ..Default::default()
-                })?;
-                self.code
-                    .borrow_mut()
-                    .insert(key.to_string(), Box::leak(bytes.into_boxed_slice()));
-                m
+                // The same source compiles to the same bytecode in every
+                // runtime, so it is compiled, and kept for good, once a
+                // process: a worker building a runtime for the hundredth
+                // tenant, or again after an edit, adds nothing.
+                let id: [u8; 32] = {
+                    let mut h = Sha256::new();
+                    h.update(key.as_bytes());
+                    h.update([0]);
+                    h.update(expr.as_bytes());
+                    h.finalize().into()
+                };
+                let known = COMPILED.lock().expect("compiled").get(&id).copied();
+                match known {
+                    Some(bytes) => {
+                        self.code.borrow_mut().insert(key.to_string(), bytes);
+                        // SAFETY: as above.
+                        unsafe { Module::load(ctx.clone(), bytes)? }
+                    }
+                    None => {
+                        let m =
+                            Module::declare(ctx.clone(), key, format!("export default {expr};"))?;
+                        let bytes: &'static [u8] = Box::leak(
+                            m.write(WriteOptions {
+                                strip_debug: true,
+                                ..Default::default()
+                            })?
+                            .into_boxed_slice(),
+                        );
+                        let bytes = *COMPILED
+                            .lock()
+                            .expect("compiled")
+                            .entry(id)
+                            .or_insert(bytes);
+                        self.code.borrow_mut().insert(key.to_string(), bytes);
+                        m
+                    }
+                }
             }
         };
         let (module, promise) = module.eval()?;
@@ -351,12 +500,7 @@ impl Engine {
                 continue;
             }
             let skip = st.tag_skipped.get(&i).cloned();
-            let outcome = match st.tag_done.get(&i) {
-                Some(true) if skip.is_some() => "skipped",
-                Some(true) => "success",
-                Some(false) => "failure",
-                None => "timeout",
-            };
+            let outcome = TagOutcome::reported(st.tag_done.get(&i).copied(), skip.is_some());
             result.tags.push(TagRun {
                 tag: m.name.clone(),
                 event: m.event.unwrap_or(0),
@@ -583,13 +727,23 @@ impl Engine {
                 .tag_ctxs
                 .iter()
                 .map(|t| {
-                    let status = match st.tag_done.get(t) {
-                        _ if errors.contains_key(t) => "exception",
-                        Some(true) => "success",
-                        Some(false) => "failure",
-                        None => "timeout",
+                    // A tag that threw is an exception, whatever it had
+                    // reported before.
+                    let kind = if errors.contains_key(t) {
+                        RunKind::Exception
+                    } else {
+                        let reported = TagOutcome::reported(
+                            st.tag_done.get(t).copied(),
+                            st.tag_skipped.contains_key(t),
+                        );
+                        match reported {
+                            TagOutcome::Success => RunKind::Success,
+                            TagOutcome::Failure => RunKind::Failure,
+                            TagOutcome::Skipped => RunKind::Skipped,
+                            TagOutcome::Timeout => RunKind::Timeout,
+                        }
                     };
-                    serde_json::json!({ "id": st.meta[*t].name, "status": status, "executionTime": 0 })
+                    serde_json::json!({ "id": st.meta[*t].name, "status": kind.sgtm_status(), "executionTime": 0 })
                 })
                 .collect();
             (callbacks, serde_json::json!({ "tags": tags }).to_string())

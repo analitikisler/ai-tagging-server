@@ -289,6 +289,18 @@ impl Container {
             transformations: file.transformations,
         };
         container.compile()?;
+        // The console never saves two tags under one name; a file written by
+        // hand can hold them, and rules and the debugger tell tags apart by
+        // name.
+        let mut seen = std::collections::HashSet::new();
+        for t in &container.tags {
+            if !seen.insert(t.name.as_str()) {
+                tracing::warn!(
+                    "two tags are called {:?}: transformations and the console treat them as one, so rename one",
+                    t.name
+                );
+            }
+        }
         for c in &container.clients {
             let ids = c
                 .data
@@ -346,7 +358,7 @@ pub fn compile_conditions(conditions: &mut [Condition]) -> Result<(), String> {
 }
 
 /// Whether a tag fires for an event, and how each of its conditions went.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trigger {
     pub event: usize,
     pub tag: String,
@@ -356,12 +368,12 @@ pub struct Trigger {
     pub enabled: bool,
     pub conditions: Vec<Check>,
     /// The transformations that changed the event this tag saw.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transformed_by: Vec<String>,
 }
 
 /// One `fire_when` condition against one event.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Check {
     pub key: String,
     pub op: Op,

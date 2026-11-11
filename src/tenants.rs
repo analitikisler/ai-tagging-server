@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::container::{Container, Settings};
-use crate::sandbox::{RunResult, Storage};
+use crate::sandbox::{RunResult, Storage, TagOutcome};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Tenant {
@@ -186,22 +186,18 @@ impl TenantStats {
         if r.claimed_by.is_none() {
             self.unclaimed.fetch_add(1, Relaxed);
         }
-        let failed = r
-            .tags
-            .iter()
-            .filter(|t| !matches!(t.outcome, "success" | "skipped"))
-            .count();
+        let failed = r.tags.iter().filter(|t| t.outcome.went_wrong()).count();
         self.tag_failures.fetch_add(failed as u64, Relaxed);
         self.tags_total.fetch_add(r.tags.len() as u64, Relaxed);
-        let ok = r
-            .sends
-            .iter()
-            .filter(|s| s.result.as_ref().is_ok_and(|&status| status < 400))
-            .count();
+        let ok = r.sends.iter().filter(|s| s.accepted()).count();
         self.sends_ok.fetch_add(ok as u64, Relaxed);
         self.sends_failed
             .fetch_add((r.sends.len() - ok) as u64, Relaxed);
-        let skipped = r.tags.iter().filter(|t| t.outcome == "skipped").count();
+        let skipped = r
+            .tags
+            .iter()
+            .filter(|t| t.outcome == TagOutcome::Skipped)
+            .count();
         self.tag_skips.fetch_add(skipped as u64, Relaxed);
     }
 
@@ -237,7 +233,7 @@ struct State {
 pub struct Tenants {
     path: PathBuf,
     state: RwLock<State>,
-    /// Storage and counters outlive edits of a tenant.
+    /// Storage and counters outlive edits of a tenant, and go when it is deleted.
     storage: Mutex<HashMap<String, Storage>>,
     stats: Mutex<HashMap<String, Arc<TenantStats>>>,
     generation: AtomicU64,
@@ -351,6 +347,16 @@ impl Tenants {
                 },
             );
         }
+        // A deleted tenant's storage and counters go with it, so a tenant
+        // that later takes its id starts clean.
+        self.storage
+            .lock()
+            .expect("storage")
+            .retain(|id, _| next.by_id.contains_key(id));
+        self.stats
+            .lock()
+            .expect("stats")
+            .retain(|id, _| next.by_id.contains_key(id));
         *state = next;
     }
 

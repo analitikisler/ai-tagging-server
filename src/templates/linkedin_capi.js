@@ -8,13 +8,12 @@
 // Tag by `eventId`.
 const API_VERSION = '202608';
 
-if (!data.access_token || !data.conversions) {
-  data.gtmOnFailure();
+if (missing(['access_token', 'conversions'])) {
   return;
 }
 
 const eventName = getEventData('event_name');
-const rule = eventMap(data.conversions)[eventName];
+const rule = mapped(eventMap(data.conversions), eventName);
 if (!rule) {
   skip('unmapped_event');
   return;

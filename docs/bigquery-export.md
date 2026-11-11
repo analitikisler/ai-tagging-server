@@ -1,6 +1,6 @@
 # BigQuery export
 
-The `bigquery_export` tag writes each event as one row of a BigQuery table, using streaming inserts (`tabledata.insertAll`). It appears on `/admin` as a fourth card, **BigQuery export**, next to Meta, TikTok and Pinterest, with the same Save, on/off and "Send a test event" controls.
+The `bigquery_export` tag writes each event as one row of a BigQuery table, using streaming inserts (`tabledata.insertAll`). It appears on `/admin` as a card, **BigQuery export**, next to the ad platforms, with the same Save, on/off and "Send a test event" controls.
 
 This guide covers what to set up in Google Cloud, which settings the server needs, and how to check that rows arrive.
 
@@ -79,7 +79,7 @@ A bad key file or an unknown `GOOGLE_AUTH` value stops the server at startup, wi
 
 ## 4. Turn the export on
 
-1. Open `/admin` (set `ADMIN_TOKEN` and `INTEGRATIONS_FILE` first, as described in [ad platforms](../README.md#ad-platforms-meta-tiktok-pinterest)).
+1. Open `/admin` (set `ADMIN_TOKEN` and `INTEGRATIONS_FILE` first, as described in [ad platforms](../README.md#ad-platforms-meta-tiktok-pinterest-google-ads)).
 2. In the **BigQuery export** card, enter:
    - **Project ID**: the Google Cloud project that owns the table.
    - **Dataset ID** and **Table ID**: letters, digits, `_` and `-`. A partition decorator such as `events$20261015` is accepted.

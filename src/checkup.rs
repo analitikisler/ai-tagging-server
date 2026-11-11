@@ -9,6 +9,7 @@
 //! and the AI reads them for its to-do list.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use regex::Regex;
@@ -17,6 +18,8 @@ use serde_json::{Value, json};
 use crate::ai::setup::needs;
 use crate::counts::Counts;
 use crate::integrations::PROVIDERS;
+use crate::sandbox::{RunResult, SendRecord};
+use crate::traces::Record;
 
 /// Most bytes read from a page or a GTM container.
 const MAX_FETCH: usize = 5 * 1024 * 1024;
@@ -53,12 +56,37 @@ fn truthy(v: &Value) -> bool {
 fn in_test_mode(tag: &Value) -> bool {
     let d = &tag["data"];
     match tag["template"].as_str().unwrap_or_default() {
-        "meta_capi" | "tiktok_events" => {
+        "meta_capi" | "tiktok_events" | "reddit_capi" => {
             d["test_event_code"].as_str().is_some_and(|s| !s.is_empty())
         }
-        "pinterest_capi" | "google_ads" => truthy(&d["test_mode"]),
+        "pinterest_capi" | "google_ads" | "snapchat_capi" => truthy(&d["test_mode"]),
         _ => false,
     }
+}
+
+/// The first line a tag logged in a run, cut to a length that fits a
+/// finding: where a failing tag says why.
+fn log_line(run: &RunResult, tag: &str) -> Option<String> {
+    let prefix = format!("[{tag}]");
+    run.logs
+        .iter()
+        .find(|l| l.starts_with(&prefix))
+        .map(|l| l.chars().take(200).collect())
+}
+
+/// Whether a page address carries a Google ad click.
+fn has_ad_click(url: &str) -> bool {
+    ["gclid=", "gbraid=", "wbraid="]
+        .iter()
+        .any(|k| url.contains(k))
+}
+
+/// Whether a template is an ad platform's tag. The Integrations page also
+/// sets up the BigQuery export and the Shopify client, which are not.
+fn is_ad_template(template: &Value) -> bool {
+    PROVIDERS
+        .iter()
+        .any(|p| *template == p.template && !p.client && p.id != "bigquery")
 }
 
 /// The platform a browser pixel would duplicate, for a tag template.
@@ -78,14 +106,11 @@ fn pixel_of(template: &str) -> Option<&'static str> {
 pub fn check(
     container: &Value,
     counts: &Counts,
-    hits: &[Value],
+    hits: &[Arc<Record>],
     web: Option<&Value>,
 ) -> Vec<Value> {
     let mut out = Vec::new();
-    let events: Vec<&Value> = hits
-        .iter()
-        .flat_map(|t| t["result"]["events"].as_array().into_iter().flatten())
-        .collect();
+    let events: Vec<&Value> = hits.iter().flat_map(|t| t.events()).collect();
 
     // The website reaching this server.
     if counts.hits == 0 {
@@ -115,10 +140,11 @@ pub fn check(
             ));
         }
     }
-    if hits
-        .iter()
-        .any(|t| t["result"]["claimed_by"] == "Google scripts")
-    {
+    if hits.iter().any(|t| {
+        t.result
+            .as_ref()
+            .is_some_and(|r| r.claimed_by.as_deref() == Some("Google scripts"))
+    }) {
         out.push(item("scripts_first_party", "ok", "website", json!({})));
     }
 
@@ -156,20 +182,15 @@ pub fn check(
             Some(r) if r.runs > 0 && pct(r.failed, r.runs) >= 10.0 => {
                 // The first failing run's log line says why.
                 let why = hits.iter().find_map(|h| {
-                    let failed = h["result"]["tags"]
-                        .as_array()?
+                    let r = h.result.as_ref()?;
+                    let failed = r
+                        .tags
                         .iter()
-                        .any(|x| x["tag"] == name && x["outcome"] != "success");
+                        .any(|x| x.tag == name && x.outcome.went_wrong());
                     if !failed {
                         return None;
                     }
-                    let prefix = format!("[{name}]");
-                    h["result"]["logs"]
-                        .as_array()?
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .find(|l| l.starts_with(&prefix))
-                        .map(|l| l.chars().take(200).collect::<String>())
+                    log_line(r, name)
                 });
                 out.push(item("tag_failing", "bad", "server", json!({ "tag": name, "failed": r.failed, "runs": r.runs, "pct": pct(r.failed, r.runs), "why": why })));
             }
@@ -187,7 +208,7 @@ pub fn check(
     }
     let ad_tags: Vec<&&Value> = enabled
         .iter()
-        .filter(|t| PROVIDERS.iter().any(|p| t["template"] == p.template))
+        .filter(|t| is_ad_template(&t["template"]))
         .collect();
     if ad_tags.is_empty() {
         out.push(item("no_ad_platforms", "info", "server", json!({})));
@@ -400,13 +421,17 @@ fn web_items(w: &Value, events: &[&Value]) -> Vec<Value> {
     let here = urls
         .iter()
         .any(|u| !public.is_empty() && u.trim_end_matches('/').to_lowercase().starts_with(&public));
+    // Nothing can be said about a container that wasn't found or read.
+    let unread = (gtm.is_empty() && !direct) || w["gtm_error"].is_string();
     if urls.is_empty() {
-        out.push(item(
-            "server_url_missing",
-            "bad",
-            "website",
-            json!({ "gtm": gtm, "public_url": public }),
-        ));
+        if !unread {
+            out.push(item(
+                "server_url_missing",
+                "bad",
+                "website",
+                json!({ "gtm": gtm, "public_url": public }),
+            ));
+        }
     } else if public.is_empty() || here {
         out.push(item(
             "server_url",
@@ -537,14 +562,21 @@ async fn fetch(client: &(reqwest::Client, bool), url: &str) -> Result<String, St
     if !allow_private && private_literal(&parsed) {
         return Err("destination is private or internal".into());
     }
-    let r = client.get(parsed).send().await.map_err(|e| e.to_string())?;
+    let mut r = client.get(parsed).send().await.map_err(|e| e.to_string())?;
     let status = r.status();
-    let bytes = r.bytes().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
         return Err(format!("HTTP {}", status.as_u16()));
     }
-    let cut = &bytes[..bytes.len().min(MAX_FETCH)];
-    Ok(String::from_utf8_lossy(cut).into_owned())
+    // Stop reading at the limit, so a huge answer is never held whole.
+    let mut bytes = Vec::new();
+    while bytes.len() < MAX_FETCH {
+        match r.chunk().await.map_err(|e| e.to_string())? {
+            Some(chunk) => bytes.extend_from_slice(&chunk),
+            None => break,
+        }
+    }
+    bytes.truncate(MAX_FETCH);
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// A client for the site and GTM: public addresses only (each redirect is
@@ -564,7 +596,10 @@ pub fn client(allow_private: bool) -> (reqwest::Client, bool) {
         .redirect(policy)
         .user_agent("Mozilla/5.0 (compatible; AI-Tagging-Server setup check)");
     if !allow_private {
-        b = b.dns_resolver(std::sync::Arc::new(crate::server::PublicOnlyResolver));
+        // A proxy would resolve names itself, past the resolver's check.
+        b = b
+            .no_proxy()
+            .dns_resolver(std::sync::Arc::new(crate::server::PublicOnlyResolver));
     }
     (b.build().expect("http client"), allow_private)
 }
@@ -652,14 +687,14 @@ pub async fn analyse_from(
 /// (didn't run, failed, sent nothing, or the platform refused), with the
 /// problems and the tag's log line. Waiting, with the events that count,
 /// until the session sends one.
-fn verdict(session: &[(u64, &Value)], container: &Value, pixels: &BTreeSet<String>) -> Value {
+fn verdict(session: &[(u64, &Record)], container: &Value, pixels: &BTreeSet<String>) -> Value {
     let tags: Vec<&Value> = container["tags"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|t| t["enabled"] != json!(false))
         .collect();
-    let is_ad = |t: &Value| PROVIDERS.iter().any(|p| t["template"] == p.template);
+    let is_ad = |t: &Value| is_ad_template(&t["template"]);
     let mut conversions: BTreeSet<String> = tags
         .iter()
         .filter(|t| is_ad(t))
@@ -668,25 +703,19 @@ fn verdict(session: &[(u64, &Value)], container: &Value, pixels: &BTreeSet<Strin
     if conversions.is_empty() {
         conversions.insert("purchase".into());
     }
-    let click_in = |t: &Value| {
-        let urls = t["result"]["events"]
-            .as_array()
-            .into_iter()
-            .flatten()
+    let click_in = |t: &Record| {
+        let urls = t
+            .events()
+            .iter()
             .filter_map(|e| e["page_location"].as_str())
-            .any(|u| {
-                ["gclid=", "gbraid=", "wbraid="]
-                    .iter()
-                    .any(|k| u.contains(k))
-            });
+            .any(has_ad_click);
         // Traces keep cookie names: the click cookie is there when it was set.
-        let cookie = t["request"]["headers"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|h| h[0] == "cookie")
-            .filter_map(|h| h[1].as_str())
-            .any(|c| {
+        let cookie = t
+            .request
+            .headers
+            .iter()
+            .filter(|(name, _)| name == "cookie")
+            .any(|(_, c)| {
                 ["_sst_ads", "_gcl_aw", "_gcl_gb"]
                     .iter()
                     .any(|n| c.contains(n))
@@ -695,18 +724,17 @@ fn verdict(session: &[(u64, &Value)], container: &Value, pixels: &BTreeSet<Strin
     };
     let clicked = session.iter().any(|(_, t)| click_in(t));
     let found = session.iter().rev().find_map(|(id, t)| {
-        let evs = t["result"]["events"].as_array()?;
-        let (i, e) = evs.iter().enumerate().rev().find(|(_, e)| {
+        let r = t.result.as_ref()?;
+        let (i, e) = r.events.iter().enumerate().rev().find(|(_, e)| {
             e["event_name"]
                 .as_str()
                 .is_some_and(|n| conversions.contains(n))
         })?;
-        Some((*id, t, i, e))
+        Some((*id, *t, r, i, e))
     });
-    let Some((id, t, idx, ev)) = found else {
+    let Some((id, t, r, idx, ev)) = found else {
         return json!({ "waiting": conversions });
     };
-    let r = &t["result"];
     let name_of = ev["event_name"].as_str().unwrap_or_default().to_string();
     let present = |k: &str| match &ev[k] {
         Value::Null => false,
@@ -722,35 +750,17 @@ fn verdict(session: &[(u64, &Value)], container: &Value, pixels: &BTreeSet<Strin
         } else {
             template == "ga4_tag"
         };
-        let run = r["tags"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|x| x["tag"] == name && x["event"].as_u64() == Some(idx as u64));
+        let run = r.tags.iter().find(|x| x.tag == name && x.event == idx);
         if run.is_none() && !should {
             continue;
         }
-        let sends: Vec<&Value> = r["sends"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|s| s["from"] == name)
-            .collect();
-        let refused = sends
-            .iter()
-            .any(|s| s["result"]["Ok"].as_u64().is_none_or(|c| c >= 400));
-        let prefix = format!("[{name}]");
-        let why = r["logs"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .find(|l| l.starts_with(&prefix))
-            .map(|l| l.chars().take(200).collect::<String>());
+        let sends: Vec<&SendRecord> = r.sends.iter().filter(|s| s.from == name).collect();
+        let refused = sends.iter().any(|s| !s.accepted());
+        let why = log_line(r, name);
         let mut fails: Vec<&str> = Vec::new();
         match run {
             None => fails.push("not_run"),
-            Some(x) if x["outcome"] != "success" => fails.push("failed"),
+            Some(x) if x.outcome.went_wrong() => fails.push("failed"),
             _ if sends.is_empty() => fails.push("not_sent"),
             _ if refused => fails.push("refused"),
             _ => {}
@@ -790,24 +800,21 @@ fn verdict(session: &[(u64, &Value)], container: &Value, pixels: &BTreeSet<Strin
         fails.extend(warns);
         results.push(json!({ "tag": name, "template": template, "status": status, "problems": fails, "why": why }));
     }
-    json!({ "event": name_of, "trace": id, "at": t["at"], "tags": results })
+    json!({ "event": name_of, "trace": id, "at": t.at, "tags": results })
 }
 
 pub fn live(
     code: &str,
     since: u64,
-    hits: &[(u64, Value)],
+    hits: &[(u64, Arc<Record>)],
     container: &Value,
     pixels: &BTreeSet<String>,
 ) -> Value {
     let marker = format!("sst_check={code}");
-    let recent: Vec<&(u64, Value)> = hits
-        .iter()
-        .filter(|(_, t)| t["at"].as_u64().unwrap_or(0) >= since)
-        .collect();
+    let recent: Vec<&(u64, Arc<Record>)> = hits.iter().filter(|(_, t)| t.at >= since).collect();
     let clients: BTreeSet<String> = recent
         .iter()
-        .flat_map(|(_, t)| t["result"]["events"].as_array().into_iter().flatten())
+        .flat_map(|(_, t)| t.events())
         .filter(|e| {
             e["page_location"]
                 .as_str()
@@ -816,10 +823,9 @@ pub fn live(
         .filter_map(|e| e["client_id"].as_str().map(str::to_string))
         .collect();
     let mut out = Vec::new();
-    let mut session: Vec<(u64, &Value)> = Vec::new();
+    let mut session: Vec<(u64, &Record)> = Vec::new();
     for (id, t) in recent.iter().rev() {
-        let r = &t["result"];
-        let events: Vec<&Value> = r["events"].as_array().into_iter().flatten().collect();
+        let events = t.events();
         let mine = events.iter().any(|e| {
             e["client_id"].as_str().is_some_and(|c| clients.contains(c))
                 || e["page_location"]
@@ -829,7 +835,7 @@ pub fn live(
         if !mine {
             continue;
         }
-        session.push((*id, t));
+        session.push((*id, t.as_ref()));
         let evs: Vec<Value> = events
             .iter()
             .enumerate()
@@ -839,15 +845,15 @@ pub fn live(
                     Value::String(s) => !s.trim().is_empty(),
                     _ => true,
                 };
-                let tags: Vec<Value> = r["tags"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|x| x["event"].as_u64() == Some(i as u64))
-                    .map(|x| json!({ "tag": x["tag"], "outcome": x["outcome"] }))
+                let tags: Vec<Value> = t
+                    .result
+                    .iter()
+                    .flat_map(|r| &r.tags)
+                    .filter(|x| x.event == i)
+                    .map(|x| json!({ "tag": x.tag, "outcome": x.outcome }))
                     .collect();
                 let url = e["page_location"].as_str().unwrap_or_default();
-                let ad_click = ["gclid=", "gbraid=", "wbraid="].iter().any(|k| url.contains(k));
+                let ad_click = has_ad_click(url);
                 json!({
                     "name": e["event_name"],
                     "page": url,
@@ -860,14 +866,9 @@ pub fn live(
                 })
             })
             .collect();
-        let sends = r["sends"].as_array().map_or(0, Vec::len);
-        let failed = r["sends"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|s| s["result"]["Ok"].as_u64().is_none_or(|c| c >= 400))
-            .count();
-        out.push(json!({ "trace": id, "at": t["at"], "events": evs, "sends": sends, "sends_failed": failed }));
+        let sent = t.result.as_ref().map_or(&[][..], |r| &r.sends);
+        let failed = sent.iter().filter(|s| !s.accepted()).count();
+        out.push(json!({ "trace": id, "at": t.at, "events": evs, "sends": sent.len(), "sends_failed": failed }));
     }
     let verdict = if session.is_empty() {
         Value::Null

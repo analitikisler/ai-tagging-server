@@ -123,7 +123,7 @@ fn ga4_hit_is_claimed_forwarded_and_answered_204() {
     );
     assert!(url.contains("_uip=203.0.113.9"), "{url}");
     assert!(url.contains("_ua=Mozilla%2F5.0%20Test"), "{url}");
-    assert_eq!(r.tags[0].outcome, "success");
+    assert_eq!(r.tags[0].outcome, TagOutcome::Success);
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn unclaimed_request_gets_400() {
 fn failing_vendor_marks_the_tag_failed_but_still_answers() {
     let (engine, _) = engine_with(Container::builtin(), 500);
     let r = engine.run(ga4_hit("v=2&en=page_view", ""));
-    assert_eq!(r.tags[0].outcome, "failure");
+    assert_eq!(r.tags[0].outcome, TagOutcome::Failure);
     assert_eq!(r.response.status, 204);
 }
 
@@ -577,7 +577,7 @@ fn event_data_cookies_and_helpers() {
             r.logs
         );
     }
-    assert_eq!(r.tags[0].outcome, "success");
+    assert_eq!(r.tags[0].outcome, TagOutcome::Success);
 }
 
 #[test]
@@ -666,7 +666,7 @@ fn tag_that_never_reports_does_not_hang_the_client() {
     );
     let r = engine.run(ga4_hit("", ""));
     assert_eq!(r.response.status, 200);
-    assert_eq!(r.tags[0].outcome, "failure");
+    assert_eq!(r.tags[0].outcome, TagOutcome::Failure);
 }
 
 #[test]
@@ -719,7 +719,7 @@ fn identical_gets_of_one_event_go_out_once_but_posts_do_not() {
     );
     let r = engine.run(ga4_hit("", ""));
     assert!(
-        r.tags.iter().all(|t| t.outcome == "success"),
+        r.tags.iter().all(|t| t.outcome == TagOutcome::Success),
         "{:?} {:?}",
         r.tags,
         r.logs
@@ -1088,8 +1088,130 @@ fn permitted_urls_are_sent_and_others_are_refused() {
         let (engine, rec) = engine_with(c, 200);
         let r = engine.run(ga4_hit(HIT, ""));
         assert_eq!(rec.sent.lock().unwrap().len(), sent, "{url}: {:?}", r.logs);
-        assert_eq!(r.tags[0].outcome, outcome, "{url}: {:?}", r.tags);
+        assert_eq!(r.tags[0].outcome.as_str(), outcome, "{url}: {:?}", r.tags);
     }
+}
+
+#[test]
+fn a_template_cannot_get_past_its_permissions() {
+    let done = ".then(data.gtmOnSuccess, data.gtmOnFailure);";
+    let attempts = [
+        // Changing a built-in the check might lean on.
+        format!("[].__proto__.some = () => true;\nrequire('sendHttpRequest')('https://evil.test/x'){done}"),
+        // A grant that sits on a prototype, not in the template's own.
+        format!("({{}}).__proto__.urls = ['*'];\nrequire('sendHttpRequest')('https://evil.test/x'){done}"),
+        // An address that reads differently the second time it is asked.
+        format!("let n = 0;\nconst u = {{ toString: () => (n++ ? 'https://evil.test/x' : 'https://example.com/ok') }};\nrequire('sendHttpRequest')(u){done}"),
+        // A `*` in the host stays in the host.
+        format!("require('sendHttpRequest')('https://evil.test/a.example.org/x'){done}"),
+        format!("require('sendHttpRequest')('https://evil.test?.example.org/x'){done}"),
+        format!("require('sendHttpRequest')('https://evil.test\\\\.example.org/x'){done}"),
+        format!("require('sendHttpRequest')('https://a.example.org@evil.test/x'){done}"),
+        // Taking the unchecked function out of the wrapper.
+        "let raw;\n(function () {}).__proto__.apply = function () { raw = this; };\n\
+         const send = require('sendHttpRequest');\ntry { send('https://example.com/ok'); } catch (e) {}\n\
+         if (raw) raw('https://evil.test/x');\ndata.gtmOnSuccess();"
+            .to_string(),
+    ];
+    for src in &attempts {
+        let c = permitted_tag(
+            src,
+            json!({"send_http": {"urls": ["https://example.com/*", "https://*.example.org/*"]}}),
+        );
+        let (engine, rec) = engine_with(c, 200);
+        let r = engine.run(ga4_hit(HIT, ""));
+        let sent = rec.sent.lock().unwrap();
+        assert!(
+            sent.iter().all(|o| !o.url.contains("evil.test")),
+            "{src}: sent {:?}, {:?}",
+            sent.iter().map(|o| &o.url).collect::<Vec<_>>(),
+            r.tags
+        );
+    }
+    // With no send permission at all, one on a prototype doesn't count.
+    let c = permitted_tag(
+        "({}).__proto__.send_http = { urls: ['*'] };\nconst r = require;\nr('sendHttpRequest')('https://evil.test/x');\ndata.gtmOnSuccess();",
+        json!({}),
+    );
+    let (engine, rec) = engine_with(c, 200);
+    assert_eq!(
+        engine.run(ga4_hit(HIT, "")).tags[0].outcome,
+        TagOutcome::Failure
+    );
+    assert!(rec.sent.lock().unwrap().is_empty());
+    // What the patterns do allow still goes out.
+    for url in ["https://example.com/ok?x=1", "https://a.b.example.org/x"] {
+        let mut c = permitted_tag(
+            "require('sendHttpRequest')(data.url).then(data.gtmOnSuccess, data.gtmOnFailure);",
+            json!({"send_http": {"urls": ["https://example.com/*", "https://*.example.org/*"]}}),
+        );
+        c.tags[0].data = json!({ "url": url });
+        let (engine, rec) = engine_with(c, 200);
+        let r = engine.run(ga4_hit(HIT, ""));
+        assert_eq!(
+            r.tags[0].outcome,
+            TagOutcome::Success,
+            "{url}: {:?}",
+            r.tags
+        );
+        assert_eq!(rec.sent.lock().unwrap()[0].url, url);
+    }
+}
+
+#[test]
+fn a_file_templates_built_ins_are_sealed_but_its_own_objects_are_not() {
+    // Changing a built-in throws, for whatever the template meant by it.
+    for src in [
+        "[].__proto__.map = () => [];\ndata.gtmOnSuccess();",
+        "''.__proto__.split = () => ['secret'];\ndata.gtmOnSuccess();",
+        "({}).__proto__.polluted = 1;\ndata.gtmOnSuccess();",
+        "({}).constructor.keys = () => [];\ndata.gtmOnSuccess();",
+        "(() => 1).__proto__.call = () => true;\ndata.gtmOnSuccess();",
+    ] {
+        let (engine, _) = engine_with(permitted_tag(src, json!({})), 200);
+        let r = engine.run(ga4_hit(HIT, ""));
+        assert_eq!(
+            r.tags[0].outcome,
+            TagOutcome::Failure,
+            "{src}: {:?}",
+            r.tags
+        );
+    }
+    // Its own objects take any name, also ones every object inherits.
+    let src = "const o = {};\n\
+        o.toString = () => 'mine';\n\
+        o.constructor = 1;\n\
+        const byKey = {};\n\
+        ['valueOf', 'hasOwnProperty', 'x'].forEach((k) => { byKey[k] = k; });\n\
+        const list = [3, 1, 2].map((n) => n * 2).filter((n) => n > 2);\n\
+        require('logToConsole')('' + o, o.constructor, byKey.valueOf, byKey.hasOwnProperty, list.join('-'));\n\
+        data.gtmOnSuccess();";
+    let (engine, _) = engine_with(permitted_tag(src, json!({"logging": {}})), 200);
+    let r = engine.run(ga4_hit(HIT, ""));
+    assert_eq!(r.tags[0].outcome, TagOutcome::Success, "{:?}", r.tags);
+    assert!(
+        r.logs
+            .iter()
+            .any(|l| l == "[t] mine 1 valueOf hasOwnProperty 6-4"),
+        "{:?}",
+        r.logs
+    );
+}
+
+#[test]
+fn a_long_log_line_in_any_script_is_cut_not_fatal() {
+    let c = permitted_tag(
+        "require('logToConsole')(data.text);\ndata.gtmOnSuccess();",
+        json!({"logging": {}}),
+    );
+    let mut c = c;
+    // Two bytes a character after an odd start, so byte 1024 falls inside one.
+    c.tags[0].data = json!({ "text": format!("a{}", "é".repeat(2000)) });
+    let (engine, _) = engine_with(c, 200);
+    let r = engine.run(ga4_hit(HIT, ""));
+    assert_eq!(r.tags[0].outcome, TagOutcome::Success, "{:?}", r.tags);
+    let line = r.logs.iter().find(|l| l.starts_with("[t]")).unwrap();
+    assert!(line.len() == 1023 && line.ends_with('é'), "{}", line.len());
 }
 
 #[test]
@@ -1106,7 +1228,7 @@ fn event_data_is_limited_to_the_permitted_keys() {
     let (engine, _) = engine_with(c, 200);
     let r = engine.run(ga4_hit(HIT, ""));
     // The unpermitted key throws before logging.
-    assert_eq!(r.tags[0].outcome, "failure", "{:?}", r.logs);
+    assert_eq!(r.tags[0].outcome, TagOutcome::Failure, "{:?}", r.logs);
     assert!(
         r.tags[0]
             .error
@@ -1123,11 +1245,17 @@ fn getting_all_event_data_needs_any_key() {
     let src = "require('getAllEventData')();\ndata.gtmOnSuccess();";
     let narrow = permitted_tag(src, json!({"read_event_data": {"keys": ["event_name"]}}));
     let (engine, _) = engine_with(narrow, 200);
-    assert_eq!(engine.run(ga4_hit(HIT, "")).tags[0].outcome, "failure");
+    assert_eq!(
+        engine.run(ga4_hit(HIT, "")).tags[0].outcome,
+        TagOutcome::Failure
+    );
 
     let any = permitted_tag(src, json!({"read_event_data": {"keys": ["*"]}}));
     let (engine, _) = engine_with(any, 200);
-    assert_eq!(engine.run(ga4_hit(HIT, "")).tags[0].outcome, "success");
+    assert_eq!(
+        engine.run(ga4_hit(HIT, "")).tags[0].outcome,
+        TagOutcome::Success
+    );
 }
 
 #[test]
@@ -1136,7 +1264,7 @@ fn an_api_without_its_permission_cannot_be_required() {
     let c = permitted_tag(src, json!({}));
     let (engine, _) = engine_with(c, 200);
     let r = engine.run(ga4_hit(HIT, ""));
-    assert_eq!(r.tags[0].outcome, "failure");
+    assert_eq!(r.tags[0].outcome, TagOutcome::Failure);
     assert!(
         r.logs.iter().any(|l| l.contains("\"logging\" permission")),
         "{:?}",
@@ -1163,7 +1291,7 @@ fn every_listed_api_can_be_required_by_a_trusted_template() {
     let c = custom(&[("t", &src)], &["ga4_client"], &["t"]);
     let (engine, _) = engine_with(c, 200);
     let r = engine.run(ga4_hit(HIT, ""));
-    assert_eq!(r.tags[0].outcome, "success", "{:?}", r.logs);
+    assert_eq!(r.tags[0].outcome, TagOutcome::Success, "{:?}", r.logs);
 }
 
 const RUN_ONE_EVENT: &str = r#"
@@ -1189,7 +1317,7 @@ fn hmac_sha256_signs_in_base64_or_hex() {
         204,
     );
     let r = engine.run(ga4_hit("", ""));
-    assert_eq!(r.tags[0].outcome, "success", "{:?}", r.logs);
+    assert_eq!(r.tags[0].outcome, TagOutcome::Success, "{:?}", r.logs);
     // RFC 4231 test case 2.
     let hex = "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843";
     assert!(r.logs.contains(&format!("[t] {hex}")), "{:?}", r.logs);
@@ -1439,7 +1567,13 @@ const EMAIL_HASH: &str = "b4c9a289323b21a01c3e940f150eb9b8c542587f1abfd8f0e1cc1f
 fn meta_sends_a_purchase_with_hashed_user_data() {
     let (engine, rec) = engine_with(providers(&[META], None), 200);
     let r = engine.run(meta_hit(PURCHASE));
-    assert_eq!(r.tags[1].outcome, "success", "{:?} {:?}", r.tags, r.logs);
+    assert_eq!(
+        r.tags[1].outcome,
+        TagOutcome::Success,
+        "{:?} {:?}",
+        r.tags,
+        r.logs
+    );
     let sent = bodies(&rec, "https://graph.facebook.com");
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].0.url, "https://graph.facebook.com/v26.0/123/events");
@@ -1467,7 +1601,13 @@ fn tiktok_sends_a_payment_with_its_own_shape() {
     let mut req = ga4_hit(PURCHASE, "");
     req.headers.push(("cookie".into(), "_ttp=ttp-1".into()));
     let r = engine.run(req);
-    assert_eq!(r.tags[1].outcome, "success", "{:?} {:?}", r.tags, r.logs);
+    assert_eq!(
+        r.tags[1].outcome,
+        TagOutcome::Success,
+        "{:?} {:?}",
+        r.tags,
+        r.logs
+    );
     let sent = bodies(&rec, "https://business-api.tiktok.com");
     assert_eq!(sent.len(), 1);
     assert_eq!(
@@ -1497,7 +1637,13 @@ fn tiktok_sends_a_payment_with_its_own_shape() {
 fn pinterest_sends_a_checkout_to_the_test_endpoint() {
     let (engine, rec) = engine_with(providers(&[PINTEREST], None), 200);
     let r = engine.run(ga4_hit(PURCHASE, ""));
-    assert_eq!(r.tags[1].outcome, "success", "{:?} {:?}", r.tags, r.logs);
+    assert_eq!(
+        r.tags[1].outcome,
+        TagOutcome::Success,
+        "{:?} {:?}",
+        r.tags,
+        r.logs
+    );
     let sent = bodies(&rec, "https://api.pinterest.com");
     assert_eq!(sent.len(), 1);
     assert_eq!(
@@ -1524,7 +1670,13 @@ fn snapchat_sends_a_purchase_to_the_validate_endpoint() {
     req.headers.push(("cookie".into(), "_scid=sc-1".into()));
     let (engine, rec) = engine_with(providers(&[SNAPCHAT], None), 200);
     let r = engine.run(req);
-    assert_eq!(r.tags[1].outcome, "success", "{:?} {:?}", r.tags, r.logs);
+    assert_eq!(
+        r.tags[1].outcome,
+        TagOutcome::Success,
+        "{:?} {:?}",
+        r.tags,
+        r.logs
+    );
     let sent = bodies(&rec, "https://tr.snapchat.com");
     assert_eq!(sent.len(), 1);
     assert_eq!(
@@ -1553,7 +1705,13 @@ fn reddit_sends_a_purchase_with_its_test_id() {
         .push(("cookie".into(), "_rdt_uuid=u-1; _rdt_cid=c-1".into()));
     let (engine, rec) = engine_with(providers(&[REDDIT], None), 200);
     let r = engine.run(req);
-    assert_eq!(r.tags[1].outcome, "success", "{:?} {:?}", r.tags, r.logs);
+    assert_eq!(
+        r.tags[1].outcome,
+        TagOutcome::Success,
+        "{:?} {:?}",
+        r.tags,
+        r.logs
+    );
     let sent = bodies(&rec, "https://ads-api.reddit.com");
     assert_eq!(sent.len(), 1);
     assert_eq!(
@@ -1599,7 +1757,13 @@ fn linkedin_sends_mapped_conversions_and_skips_unmatchable_visitors() {
 
     let hit = PURCHASE.replace("thanks", "thanks%3Fli_fat_id%3Dfat-1");
     let r = engine.run(ga4_hit(&hit, ""));
-    assert_eq!(r.tags[1].outcome, "success", "{:?} {:?}", r.tags, r.logs);
+    assert_eq!(
+        r.tags[1].outcome,
+        TagOutcome::Success,
+        "{:?} {:?}",
+        r.tags,
+        r.logs
+    );
     let sent = bodies(&rec, "https://api.linkedin.com");
     assert_eq!(sent.len(), 1);
     assert_eq!(
@@ -1648,7 +1812,13 @@ fn x_sends_a_signed_conversion() {
         PURCHASE.replace("thanks", "thanks%3Ftwclid%3Dtw-click")
     );
     let r = engine.run(ga4_hit(&hit, ""));
-    assert_eq!(r.tags[1].outcome, "success", "{:?} {:?}", r.tags, r.logs);
+    assert_eq!(
+        r.tags[1].outcome,
+        TagOutcome::Success,
+        "{:?} {:?}",
+        r.tags,
+        r.logs
+    );
     let sent = bodies(&rec, "https://ads-api.twitter.com");
     assert_eq!(sent.len(), 1);
     assert_eq!(
@@ -1699,7 +1869,7 @@ fn purchase_items_reach_every_platform() {
     let (engine, rec) = engine_with(providers(&[META, TIKTOK, PINTEREST], None), 200);
     let r = engine.run(meta_hit(&hit));
     assert!(
-        r.tags[1..].iter().all(|t| t.outcome == "success"),
+        r.tags[1..].iter().all(|t| t.outcome == TagOutcome::Success),
         "{:?} {:?}",
         r.tags,
         r.logs
@@ -1758,6 +1928,11 @@ fn ad_tags_skip_with_a_reason_and_send_nothing() {
             "v=2&tid=G-1&cid=1.2&en=scroll&gcd=13r3r3r2r5l1".to_string(),
             "unmapped_event",
         ),
+        // A name every object carries is still not a platform event.
+        (
+            "v=2&tid=G-1&cid=1.2&en=constructor&gcd=13r3r3r2r5l1".to_string(),
+            "unmapped_event",
+        ),
         // Today's banner: analytics only, so gcs=G101.
         (format!("{BASE}&gcs=G101"), "consent:ad_storage=denied"),
         // Ad storage granted, ad user data denied after the banner ("q").
@@ -1789,7 +1964,7 @@ fn ad_tags_skip_with_a_reason_and_send_nothing() {
         assert_eq!(r.response.status, 204, "{q}");
         assert_eq!(r.tags.len(), 8, "{q}");
         for t in &r.tags[1..] {
-            assert_eq!(t.outcome, "skipped", "{q}: {:?}", r.tags);
+            assert_eq!(t.outcome, TagOutcome::Skipped, "{q}: {:?}", r.tags);
             assert_eq!(t.skip.as_deref(), Some(reason), "{q}");
         }
         let sent = rec.sent.lock().unwrap();
@@ -1809,7 +1984,12 @@ fn consent_granted_by_default_or_by_update_sends() {
         let (engine, rec) = engine_with(providers(&[META], None), 200);
         let q = format!("v=2&tid=G-1&cid=1.2&en=purchase&gcd={gcd}");
         let r = engine.run(meta_hit(&q));
-        assert_eq!(r.tags[1].outcome, "success", "{gcd}: {:?}", r.tags);
+        assert_eq!(
+            r.tags[1].outcome,
+            TagOutcome::Success,
+            "{gcd}: {:?}",
+            r.tags
+        );
         assert_eq!(bodies(&rec, "https://graph.facebook.com").len(), 1, "{gcd}");
     }
 }
@@ -1826,7 +2006,7 @@ fn send_without_consent_only_covers_missing_signals() {
     );
     let (engine, rec) = engine_with(providers(&[META_NO_CMP], None), 200);
     let r = engine.run(meta_hit("v=2&tid=G-1&cid=1.2&en=purchase"));
-    assert_eq!(r.tags[1].outcome, "success", "{:?}", r.tags);
+    assert_eq!(r.tags[1].outcome, TagOutcome::Success, "{:?}", r.tags);
     assert_eq!(bodies(&rec, "https://graph.facebook.com").len(), 1);
 
     // A visitor who said no is still never sent.
@@ -1854,7 +2034,7 @@ fn a_skipped_tag_reads_as_success_to_event_callbacks() {
     );
     let r = engine.run(ga4_hit("", ""));
     // The first call wins, as with gtmOnSuccess and gtmOnFailure.
-    assert_eq!(r.tags[1].outcome, "skipped");
+    assert_eq!(r.tags[1].outcome, TagOutcome::Skipped);
     assert_eq!(r.tags[1].skip.as_deref(), Some("because"));
     assert!(
         r.logs
@@ -1872,7 +2052,7 @@ fn a_rejected_send_fails_the_tag() {
         r#"{"error":{"message":"Invalid OAuth access token"}}"#,
     );
     let r = engine.run(meta_hit(PURCHASE));
-    assert_eq!(r.tags[1].outcome, "failure");
+    assert_eq!(r.tags[1].outcome, TagOutcome::Failure);
     // The debug report says why, without repeating the token.
     let send = r.sends.iter().find(|s| s.from.contains("Meta")).unwrap();
     assert!(send.detail.as_deref().unwrap().contains("Invalid OAuth"));
@@ -1891,7 +2071,7 @@ fn enrichment_adds_hashed_fields_from_the_sites_server() {
     );
     let r = engine.run(meta_hit(PURCHASE));
     assert!(
-        r.tags[1..].iter().all(|t| t.outcome == "success"),
+        r.tags[1..].iter().all(|t| t.outcome == TagOutcome::Success),
         "{:?} {:?}",
         r.tags,
         r.logs
@@ -1941,7 +2121,7 @@ fn enrichment_adds_hashed_fields_from_the_sites_server() {
     assert_eq!(meta["external_id"][0], hex("cust-7"));
     let tt = &bodies(&rec, "https://business-api.tiktok.com")[0].1["data"][0]["user"];
     assert_eq!(tt["email"], hex("jane@example.com"));
-    assert_eq!(tt["phone_number"], hex("491701234567"));
+    assert_eq!(tt["phone"], hex("+491701234567"));
 }
 
 #[test]
@@ -1978,7 +2158,13 @@ fn enrichment_failure_still_sends_the_conversion() {
     )
     .unwrap();
     let r = engine.run(meta_hit(PURCHASE));
-    assert_eq!(r.tags[1].outcome, "success", "{:?} {:?}", r.tags, r.logs);
+    assert_eq!(
+        r.tags[1].outcome,
+        TagOutcome::Success,
+        "{:?} {:?}",
+        r.tags,
+        r.logs
+    );
     let sent = t.0.lock().unwrap();
     assert!(
         sent.iter()
@@ -1996,7 +2182,7 @@ fn provider_without_its_settings_says_why() {
         .remove("access_token");
     let (engine, rec) = engine_with(c, 200);
     let r = engine.run(meta_hit(PURCHASE));
-    assert_eq!(r.tags[1].outcome, "failure");
+    assert_eq!(r.tags[1].outcome, TagOutcome::Failure);
     assert!(
         r.logs.iter().any(|l| l.contains("access_token not set")),
         "{:?}",
@@ -2013,7 +2199,7 @@ fn tiktok_refusal_inside_a_200_fails_the_tag() {
         r#"{"code":40001,"message":"Invalid access token"}"#,
     );
     let r = engine.run(ga4_hit(PURCHASE, ""));
-    assert_eq!(r.tags[1].outcome, "failure", "{:?}", r.logs);
+    assert_eq!(r.tags[1].outcome, TagOutcome::Failure, "{:?}", r.logs);
     assert!(
         r.logs
             .iter()
@@ -2058,7 +2244,13 @@ const WITH_USER_DATA: &str = "&ep.user_data.email_address=%20Jane%40Example.com%
 fn event_user_data_is_normalised_and_hashed_before_it_is_sent() {
     let (engine, rec) = engine_with(meta_with_user_data(true, None), 200);
     let r = engine.run(meta_hit(&format!("{PURCHASE}{WITH_USER_DATA}")));
-    assert_eq!(r.tags[1].outcome, "success", "{:?} {:?}", r.tags, r.logs);
+    assert_eq!(
+        r.tags[1].outcome,
+        TagOutcome::Success,
+        "{:?} {:?}",
+        r.tags,
+        r.logs
+    );
     let (sent, body) = &bodies(&rec, "https://graph.facebook.com")[0];
     let u = &body["data"][0]["user_data"];
     assert_eq!(u["em"][0], sha_hex("jane@example.com"));
@@ -2096,7 +2288,7 @@ fn hashed_user_data_passes_through_and_tiktok_gets_it_too() {
     );
     let r = engine.run(meta_hit(&q));
     assert!(
-        r.tags[1..].iter().all(|t| t.outcome == "success"),
+        r.tags[1..].iter().all(|t| t.outcome == TagOutcome::Success),
         "{:?}",
         r.logs
     );
@@ -2105,7 +2297,7 @@ fn hashed_user_data_passes_through_and_tiktok_gets_it_too() {
     assert_eq!(meta["ph"][0], ph);
     let tt = &bodies(&rec, "https://business-api.tiktok.com")[0].1["data"][0]["user"];
     assert_eq!(tt["email"], em);
-    assert_eq!(tt["phone_number"], ph);
+    assert_eq!(tt["phone"], ph);
 }
 
 #[test]
@@ -2147,7 +2339,7 @@ fn ga4_tag_strips_plain_user_data_only_when_asked() {
         c.compile().unwrap();
         let (engine, rec) = engine_with(c, 204);
         let r = engine.run(ga4_hit(query, ""));
-        assert_eq!(r.tags[0].outcome, "success", "{:?}", r.logs);
+        assert_eq!(r.tags[0].outcome, TagOutcome::Success, "{:?}", r.logs);
         rec.sent.lock().unwrap()[0].url.clone()
     };
 
@@ -2272,7 +2464,7 @@ fn google_ads_sends_a_conversion_with_the_click_and_a_cached_token() {
         .iter()
         .find(|t| t.tag == "Google Ads conversions")
         .unwrap();
-    assert_eq!(tag.outcome, "success", "{:?}", r.logs);
+    assert_eq!(tag.outcome, TagOutcome::Success, "{:?}", r.logs);
     // Google's answer is kept with the hit, without its access token.
     let kept = serde_json::to_string(&r.sends).unwrap();
     assert!(!kept.contains("at-1"), "{kept}");
@@ -2314,9 +2506,21 @@ fn google_ads_sends_a_conversion_with_the_click_and_a_cached_token() {
     assert_eq!(ev["transactionId"], "T1");
     assert_eq!(ev["eventTimestamp"], "2026-10-25T08:00:05+00:00");
     assert_eq!(ev["eventSource"], "WEB");
+    assert_eq!(
+        body["consent"],
+        json!({ "adUserData": "CONSENT_GRANTED", "adPersonalization": "CONSENT_GRANTED" })
+    );
 
-    // The token is reused by the next conversion.
+    // The token is reused by the next conversion, and a visitor who denied
+    // ad personalisation (the fourth letter of gcd) is reported so.
+    let mut req = req;
+    req.query = req.query.replace("gcd=13r3r3r2r5l1", "gcd=13r3r3r2q5l1");
     engine.run(req);
+    let ingest = bodies(&rec, "https://datamanager.googleapis.com/v1/events:ingest");
+    assert_eq!(
+        ingest[1].1["consent"]["adPersonalization"],
+        "CONSENT_DENIED"
+    );
     let tokens = rec
         .sent
         .lock()
@@ -2342,7 +2546,7 @@ fn google_ads_matches_on_user_data_without_a_click() {
              &dl=https%3A%2F%2Fexample.com%2Fcontact&gcd=13r3r3r2r5l1";
     let r = engine.run(ga4_hit(q, ""));
     assert!(
-        r.tags.iter().all(|t| t.outcome == "success"),
+        r.tags.iter().all(|t| t.outcome == TagOutcome::Success),
         "{:?} {:?}",
         r.tags,
         r.logs
@@ -2378,7 +2582,7 @@ fn google_ads_matches_on_user_data_without_a_click() {
         "v=2&tid=G-1&cid=1.2&en=generate_lead&dl=https%3A%2F%2Fexample.com%2F&gcd=13r3r3r2r5l1",
         "",
     ));
-    assert!(r.tags.iter().all(|t| t.outcome == "success"));
+    assert!(r.tags.iter().all(|t| t.outcome == TagOutcome::Success));
     assert!(
         r.logs
             .iter()
@@ -2405,7 +2609,7 @@ fn google_ads_reports_google_refusals() {
         .iter()
         .find(|t| t.tag == "Google Ads conversions")
         .unwrap();
-    assert_eq!(tag.outcome, "failure");
+    assert_eq!(tag.outcome, TagOutcome::Failure);
     assert!(
         r.logs
             .iter()
@@ -2451,7 +2655,13 @@ fn bigquery_writes_a_row_with_the_servers_token_and_no_ip() {
     let r = engine.run(meta_hit(&format!(
         "{PURCHASE}&dr=https%3A%2F%2Fsearch.example%2F"
     )));
-    assert_eq!(r.tags[1].outcome, "success", "{:?} {:?}", r.tags, r.logs);
+    assert_eq!(
+        r.tags[1].outcome,
+        TagOutcome::Success,
+        "{:?} {:?}",
+        r.tags,
+        r.logs
+    );
     let sent = bodies(&rec, "https://bigquery.googleapis.com");
     assert_eq!(sent.len(), 1);
     let (out, body) = &sent[0];
@@ -2492,7 +2702,7 @@ fn bigquery_writes_a_row_with_the_servers_token_and_no_ip() {
 fn bigquery_writes_items_as_json() {
     let (engine, rec) = engine_with(providers(&[BIGQUERY], None), 200);
     let r = engine.run(meta_hit(&format!("{PURCHASE}&pr1=idSKU-1~nmShoe~pr10~qt2")));
-    assert_eq!(r.tags[1].outcome, "success", "{:?}", r.logs);
+    assert_eq!(r.tags[1].outcome, TagOutcome::Success, "{:?}", r.logs);
     let sent = bodies(&rec, "https://bigquery.googleapis.com");
     let items: serde_json::Value =
         serde_json::from_str(sent[0].1["rows"][0]["json"]["items"].as_str().unwrap()).unwrap();
@@ -2542,12 +2752,12 @@ fn bigquery_skips_unselected_events_and_denied_analytics() {
         let sent = bodies(&rec, "https://bigquery.googleapis.com").len();
         match skip {
             Some(reason) => {
-                assert_eq!(r.tags[1].outcome, "skipped", "{q}: {:?}", r.tags);
+                assert_eq!(r.tags[1].outcome, TagOutcome::Skipped, "{q}: {:?}", r.tags);
                 assert_eq!(r.tags[1].skip.as_deref(), Some(reason), "{q}");
                 assert_eq!(sent, 0, "{q}");
             }
             None => {
-                assert_eq!(r.tags[1].outcome, "success", "{q}: {:?}", r.logs);
+                assert_eq!(r.tags[1].outcome, TagOutcome::Success, "{q}: {:?}", r.logs);
                 assert_eq!(sent, 1, "{q}");
             }
         }
@@ -2564,11 +2774,11 @@ fn bigquery_skips_unselected_events_and_denied_analytics() {
     );
     let (engine, rec) = engine_with(providers(&[anyway], None), 200);
     let r = engine.run(meta_hit(BASE));
-    assert_eq!(r.tags[1].outcome, "success", "{:?}", r.logs);
+    assert_eq!(r.tags[1].outcome, TagOutcome::Success, "{:?}", r.logs);
     assert_eq!(bodies(&rec, "https://bigquery.googleapis.com").len(), 1);
     let (engine, rec) = engine_with(providers(&[anyway], None), 200);
     let r = engine.run(meta_hit(&format!("{BASE}&gcs=G110")));
-    assert_eq!(r.tags[1].outcome, "skipped");
+    assert_eq!(r.tags[1].outcome, TagOutcome::Skipped);
     assert!(bodies(&rec, "https://bigquery.googleapis.com").is_empty());
 }
 
@@ -2589,7 +2799,12 @@ fn bigquery_row_errors_and_refusals_fail_the_tag() {
     ] {
         let (engine, _) = engine_answering(providers(&[BIGQUERY], None), status, answer);
         let r = engine.run(meta_hit(PURCHASE));
-        assert_eq!(r.tags[1].outcome, "failure", "{status}: {:?}", r.tags);
+        assert_eq!(
+            r.tags[1].outcome,
+            TagOutcome::Failure,
+            "{status}: {:?}",
+            r.tags
+        );
         assert!(
             r.logs.iter().any(|l| l.contains(logged)),
             "{status}: {:?}",
@@ -2620,7 +2835,7 @@ fn bigquery_insert_checks_ids_rows_and_the_permitted_tables() {
     };
 
     let (r, sent) = run(json!({"p": "my-project", "t": "events$20261015"}));
-    assert_eq!(r.tags[0].outcome, "success", "{:?}", r.logs);
+    assert_eq!(r.tags[0].outcome, TagOutcome::Success, "{:?}", r.logs);
     assert_eq!(
         sent[0].url,
         "https://bigquery.googleapis.com/bigquery/v2/projects/my-project/datasets/analytics/tables/events%2420261015/insertAll"
@@ -2629,7 +2844,7 @@ fn bigquery_insert_checks_ids_rows_and_the_permitted_tables() {
 
     // A table the permission doesn't list throws.
     let (r, sent) = run(json!({"p": "other-project", "t": "events"}));
-    assert_eq!(r.tags[0].outcome, "failure");
+    assert_eq!(r.tags[0].outcome, TagOutcome::Failure);
     assert!(
         r.tags[0]
             .error
@@ -2671,4 +2886,49 @@ fn bigquery_insert_checks_ids_rows_and_the_permitted_tables() {
         );
         assert!(rec.sent.lock().unwrap().is_empty(), "{d}");
     }
+}
+
+#[test]
+fn outcomes_keep_the_words_traces_and_the_console_know() {
+    // The console and stored traces read these words, so they don't change.
+    for (outcome, word) in [
+        (TagOutcome::Success, "success"),
+        (TagOutcome::Failure, "failure"),
+        (TagOutcome::Skipped, "skipped"),
+        (TagOutcome::Timeout, "timeout"),
+    ] {
+        assert_eq!(json!(outcome), word);
+        assert_eq!(outcome.to_string(), word);
+    }
+    assert_eq!(json!(RunKind::Exception), "exception");
+
+    // A failure that threw is an exception; one the tag reported is not.
+    let run = |outcome, error: Option<&str>| TagRun {
+        tag: "t".into(),
+        event: 0,
+        outcome,
+        error: error.map(str::to_string),
+        skip: None,
+    };
+    assert_eq!(
+        run(TagOutcome::Failure, Some("x is not defined")).kind(),
+        RunKind::Exception
+    );
+    assert_eq!(run(TagOutcome::Failure, None).kind(), RunKind::Failure);
+    // And a run read back from a trace is the run that was kept.
+    for r in [
+        run(TagOutcome::Success, None),
+        run(TagOutcome::Failure, None),
+        run(TagOutcome::Failure, Some("boom")),
+        run(TagOutcome::Skipped, None),
+        run(TagOutcome::Timeout, None),
+    ] {
+        let back: TagRun = serde_json::from_value(json!(r)).unwrap();
+        assert_eq!((back.outcome, back.kind()), (r.outcome, r.kind()));
+    }
+    assert!(serde_json::from_value::<TagRun>(json!({ "tag": "t", "outcome": "done" })).is_err());
+
+    // Only a failure, an exception or a timeout went wrong.
+    assert!(!TagOutcome::Skipped.went_wrong() && !TagOutcome::Success.went_wrong());
+    assert!(TagOutcome::Timeout.went_wrong() && TagOutcome::Failure.went_wrong());
 }
