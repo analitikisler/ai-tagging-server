@@ -2125,8 +2125,8 @@ fn purchase() -> String {
 }
 
 /// Sends one made-up event through one provider's tag, with the caller's IP
-/// and user agent as the visitor's, and answers what happened, as the event
-/// log shows it.
+/// and user agent as the visitor's, and answers what happened: how the tag
+/// ended and what the platform answered.
 async fn send_test(
     State(a): State<Admin>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,

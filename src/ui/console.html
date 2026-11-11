@@ -3568,6 +3568,17 @@ async function loadTraces() {
   }
   const first = !S.loaded;
   merge(j);
+  // The server gives 500 hits a page and the buffer can keep 2,000: the
+  // first load reads on until it has them all.
+  if (first) {
+    let page = j;
+    for (let n = 0; n < 4 && (page.traces || []).length >= 500; n += 1) {
+      const lowest = Math.min.apply(null, page.traces.map((x) => x.id));
+      if (page.oldest == null || lowest <= page.oldest) break;
+      page = await api('GET', '/admin/api/traces?limit=500&before=' + lowest);
+      merge(page);
+    }
+  }
   S.loaded = true;
   if (first) S.shownLatest = S.latest;
 }
@@ -3836,6 +3847,15 @@ async function loadTenants() {
   S.tenants = j.tenants || []; S.tenantStats = j.stats || S.tenantStats;
   return j;
 }
+// With several sites, a page that works on one of them needs the list
+// before it can pick: a page opened straight from a link shows a
+// placeholder, reads the list, then runs `go` if it is still the page open.
+function withTenants(view, box, go) {
+  if (S.mode !== 'multi' || S.tenants) { go(); return; }
+  clear(box).appendChild(skeleton());
+  loadTenants().then(() => { if (S.view === view) go(); }, (e) => { if (S.view === view) clear(box).appendChild(boxedMessage('bad', errNode(e))); });
+}
+const sitesPending = () => S.mode === 'multi' && !S.tenants;
 
 const NAV = [
   { group: 'nav.debug', items: [['overview', 'nav.overview', 'i-list'], ['live', 'nav.live', 'i-play'], ['errors', 'nav.errors', 'i-st-bad'], ['alerts', 'nav.alerts', 'i-st-warn'], ['container', 'nav.tags', 'i-settings'], ['transformations', 'nav.transformations', 'i-filter'], ['history', 'nav.history', 'i-list'], ['audit', 'nav.audit', 'i-spark']] },
@@ -3865,10 +3885,9 @@ function renderShell() {
   // Foot: theme, language, density, shortcuts, sign out, instance
   const langBtn = h('button', { class: 'button', 'data-variant': 'ghost', 'data-size': 'sm', type: 'button', lang: LANG === 'en' ? 'tr' : 'en', 'aria-label': t('lang.switch.label') }, LANG === 'en' ? t('lang.switch') : 'English');
   langBtn.addEventListener('click', () => { setLang(LANG === 'en' ? 'tr' : 'en'); rerenderAll(); });
-  const toLight = theme() === 'dark';
-  const thBtn = h('button', { class: 'button', 'data-variant': 'ghost', 'data-size': 'sm', type: 'button', 'aria-label': toLight ? t('theme.toLight.label') : t('theme.toDark.label') },
-    icon(toLight ? 'i-sun' : 'i-moon', { class: 'icon button__icon' }), toLight ? t('theme.toLight') : t('theme.toDark'));
-  thBtn.addEventListener('click', () => { setTheme(theme() === 'dark' ? 'light' : 'dark'); renderShellKeepView(); });
+  const thBtn = h('button', { class: 'button', 'data-variant': 'ghost', 'data-size': 'sm', type: 'button', id: 'theme-btn' });
+  paintThemeButton(thBtn);
+  thBtn.addEventListener('click', toggleTheme);
   const compact = document.documentElement.getAttribute('data-density') === 'compact';
   const dBtn = h('button', { class: 'button', 'data-variant': 'ghost', 'data-size': 'sm', type: 'button', 'aria-pressed': String(compact) }, icon('i-filter', { class: 'icon button__icon' }), t('density.compact'));
   dBtn.addEventListener('click', () => { const c = document.documentElement.getAttribute('data-density') === 'compact'; setDensity(c ? 'comfortable' : 'compact'); dBtn.setAttribute('aria-pressed', String(!c)); });
@@ -3897,9 +3916,18 @@ function renderShell() {
   renderSitePicker();
   updateNavCounts();
 }
-function renderShellKeepView() {
-  // The theme toggle's label changes; rebuild only the rail foot buttons by re-rendering the whole shell + view.
-  rerenderAll();
+// The theme changes where the page stands: colours follow the attribute, and
+// only the button's own label and icon are redrawn. Nothing is rebuilt, so a
+// half-filled form keeps what was typed.
+function paintThemeButton(b) {
+  const toLight = theme() === 'dark';
+  b.setAttribute('aria-label', toLight ? t('theme.toLight.label') : t('theme.toDark.label'));
+  append(clear(b), [icon(toLight ? 'i-sun' : 'i-moon', { class: 'icon button__icon' }), toLight ? t('theme.toLight') : t('theme.toDark')]);
+}
+function toggleTheme() {
+  setTheme(theme() === 'dark' ? 'light' : 'dark');
+  const b = document.getElementById('theme-btn');
+  if (b) paintThemeButton(b);
 }
 function rerenderAll() {
   const active = document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute('data-nav');
@@ -4050,7 +4078,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (k === 'g') { gAt = Date.now(); return; }
   if (k === '?' || (e.shiftKey && e.code === 'Slash')) { e.preventDefault(); helpDialog(); return; }
-  if (k === 't') { setTheme(theme() === 'dark' ? 'light' : 'dark'); rerenderAll(); return; }
+  if (k === 't') { toggleTheme(); return; }
   if (k === 'p') { if (S.cap) setPaused(!S.paused); return; }
   if (k === '/') {
     e.preventDefault();
@@ -5317,11 +5345,12 @@ VIEWS.checkup = {
   mount(main) {
     CK.box = inner(main); CK.todo = null;
     if (!containerNow('') && S.mode !== 'multi') getContainer('').then(() => { if (S.view === 'checkup') this.renderLive(); }, () => {});
-    this.load(false);
+    withTenants('checkup', CK.box, () => this.load(false));
     // A live check started before the page was left goes on.
     if (CK.live) this.pollLive();
   },
   update() {
+    if (sitesPending()) return;
     if (this.tenant() !== CK.tenant) { CK.data = null; CK.todo = null; this.load(false); return; }
     this.render();
   },
@@ -5799,8 +5828,8 @@ function tfButton(label, variant, onClick, iconId) {
   return b;
 }
 VIEWS.transformations = {
-  mount(main) { TF.box = inner(main); TF.editing = null; this.render(); },
-  update() { this.render(); },
+  mount(main) { TF.box = inner(main); TF.editing = null; withTenants('transformations', TF.box, () => this.render()); },
+  update() { if (!sitesPending()) this.render(); },
   unmount() { TF.box = null; },
   tenant() {
     if (S.mode !== 'multi') return '';
@@ -7078,8 +7107,8 @@ function featureList(c, tenant) {
   ];
 }
 VIEWS.features = {
-  mount(main) { FT.box = inner(main); this.render(); },
-  update() { this.render(); },
+  mount(main) { FT.box = inner(main); withTenants('features', FT.box, () => this.render()); },
+  update() { if (!sitesPending()) this.render(); },
   unmount() { FT.box = null; },
   tenant() {
     if (S.mode !== 'multi') return '';

@@ -1399,7 +1399,7 @@ mod tests {
             body["data"][0]["user_data"]["client_ip_address"],
             "203.0.113.9"
         );
-        // Meta's answer to the POST is kept for the event log.
+        // Meta's answer to the POST is kept with the send.
         assert_eq!(
             r.sends[0].detail.as_deref(),
             Some(r#"{"events_received":1}"#)
