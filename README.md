@@ -64,7 +64,7 @@ Then:
 
 ## Under the hood
 
-- **Sandboxed templates.** Each template run gets its own [QuickJS](https://bellard.org/quickjs/) context with no ambient access: no `eval`, no `Function` constructor, nothing global but `require` and `data`. Runs have a time budget and a memory cap, and templates from files declare the permissions they need.
+- **Sandboxed templates.** Each template run gets its own [QuickJS](https://bellard.org/quickjs/) context with no ambient access: no `eval`, no `Function` constructor, nothing global but `require` and `data`. Runs have a time budget and a memory cap, and templates from files declare the permissions they need and run with the language's built-ins sealed, so they can't change what the checks rely on.
 - **Firing rules.** Tags fire only for the events that match their conditions.
 - **Cookies and event data.** `setCookie`, `getCookieValues` and `getEventData` work, so templates that manage first-party cookies run as written.
 - **Safe outgoing requests.** Sends to private, loopback, link-local and cloud-metadata addresses are refused.
@@ -264,7 +264,7 @@ With `ADMIN_TOKEN` set, `/admin` serves the console: a debugger for recent hits 
 
 With `CONTAINER_FILE`, tags can be added, changed, turned off, reordered and deleted from the console. A save rewrites the file's `tags` list (a temporary file renamed over it) and leaves every other key as written; the new container is checked like a startup first, and a change that doesn't load is refused with nothing written. Every instance re-reads the file within a few seconds of a change, so saves and hand edits apply without a restart, and a file that no longer loads is ignored with a warning. Each save sends the `revision` it was edited from and gets `409` if the file changed since. Settings shown as `[redacted]` keep their stored value when saved unchanged. The built-in container and tenants' containers can't be edited. In integrated mode the platform tags come after the file's own and are set up under Integrations.
 
-Traces stay in the process's memory, so on Cloud Run each instance keeps its own. They drop the values of the `authorization`, `x-debug-token` and `x-proxy-secret` headers and keep only cookie names, but keep the query and up to 16 KB of the body, which can carry personal data: only people allowed to see the hits should hold the token, and `TRACE_BUFFER=0` keeps nothing. Plain user-provided data never reaches a trace or the `__debug` report: it shows as `[hashed before sending]` in events, in the request's query and body, in each event's raw hit and in forwarded URLs, and SHA-256 digests are kept. The GA4 tag forwards the hit to Google as the browser sent it, plain user data included, unless its `stripUserData` is on.
+Traces stay in the process's memory, so on Cloud Run each instance keeps its own. They drop the values of the `authorization`, `x-debug-token` and `x-proxy-secret` headers and keep only cookie names, but keep the query and up to 16 KB of a form body, which can carry personal data (of a JSON body, such as a Shopify order, only the keys are kept, never the values): only people allowed to see the hits should hold the token, and `TRACE_BUFFER=0` keeps nothing. Plain user-provided data never reaches a trace or the `__debug` report: it shows as `[hashed before sending]` in events, in the request's query and body, in each event's raw hit and in forwarded URLs, and SHA-256 digests are kept. The GA4 tag forwards the hit to Google as the browser sent it, plain user data included, unless its `stripUserData` is on.
 
 The admin routes work on any host and don't need `PROXY_SECRET`, because the edge proxy only forwards the tracking path and the token guards the rest. A wrong token is answered after half a second, and wrong tokens sent in parallel wait their turn, so an instance answers about eight guesses a second. Keep the token in Secret Manager like the other secrets, and don't route `/admin` through your Worker.
 
@@ -361,14 +361,14 @@ Permissions, with the APIs they cover. Parameters are checked on every call, and
 | `read_event_data` | `keys`: patterns; `getAllEventData` needs `["*"]` | `getEventData`, `getAllEventData` |
 | `get_cookies` | `names`: patterns | `getCookieValues` |
 | `set_cookies` | `names`: patterns | `setCookie` |
-| `read_request` | none | `getRequestMethod`, `getRequestPath`, `getRequestQueryString`, `getRequestQueryParameter(s)`, `getRequestHeader`, `getRequestBody`, `getRemoteAddress` |
+| `read_request` | none | `getRequestMethod`, `getRequestPath`, `getRequestQueryString`, `getRequestQueryParameter(s)`, `getRequestHeader`, `getRequestBody`, `getRemoteAddress`, `isRequestMpv1`, `isRequestMpv2`, `extractEventsFromMpv1`, `extractEventsFromMpv2` |
 | `access_response` | none | `setResponseStatus`, `setResponseHeader`, `setResponseBody`, `setPixelResponse` |
 | `access_bigquery` | `tables`: `project.dataset.table` patterns | `BigQuery.insert` (see the [BigQuery guide](docs/bigquery-export.md#custom-templates)) |
 | `return_response`, `run_container`, `read_container_data`, `access_template_storage`, `logging` | none | `returnResponse`, `runContainer`, `getContainerVersion`, `templateDataStorage`, `logToConsole` |
 
 Cookie domain, path and header restrictions from a `.tpl` are not enforced beyond the names. Permissions for APIs this server doesn't have yet (Firestore and the like) are ignored when a `.tpl` is read.
 
-Upgrading: a custom template in a container file used to run with every API. Add its permissions as above, or the server won't load it.
+Upgrading: a custom template in a container file used to run with every API. Add its permissions as above, or the server won't load it. `isRequestMpv1`, `isRequestMpv2`, `extractEventsFromMpv1` and `extractEventsFromMpv2` read the whole hit, so they now need `read_request` as in Google's sGTM: a custom client that calls them without it has to declare it.
 
 ## Ad platforms (Meta, TikTok, Pinterest, Google Ads)
 

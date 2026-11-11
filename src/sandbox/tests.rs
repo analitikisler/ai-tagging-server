@@ -1151,6 +1151,41 @@ fn a_template_cannot_get_past_its_permissions() {
 }
 
 #[test]
+fn a_file_templates_built_ins_are_sealed_but_its_own_objects_are_not() {
+    // Changing a built-in throws, for whatever the template meant by it.
+    for src in [
+        "[].__proto__.map = () => [];\ndata.gtmOnSuccess();",
+        "''.__proto__.split = () => ['secret'];\ndata.gtmOnSuccess();",
+        "({}).__proto__.polluted = 1;\ndata.gtmOnSuccess();",
+        "({}).constructor.keys = () => [];\ndata.gtmOnSuccess();",
+        "(() => 1).__proto__.call = () => true;\ndata.gtmOnSuccess();",
+    ] {
+        let (engine, _) = engine_with(permitted_tag(src, json!({})), 200);
+        let r = engine.run(ga4_hit(HIT, ""));
+        assert_eq!(r.tags[0].outcome, "failure", "{src}: {:?}", r.tags);
+    }
+    // Its own objects take any name, also ones every object inherits.
+    let src = "const o = {};\n\
+        o.toString = () => 'mine';\n\
+        o.constructor = 1;\n\
+        const byKey = {};\n\
+        ['valueOf', 'hasOwnProperty', 'x'].forEach((k) => { byKey[k] = k; });\n\
+        const list = [3, 1, 2].map((n) => n * 2).filter((n) => n > 2);\n\
+        require('logToConsole')('' + o, o.constructor, byKey.valueOf, byKey.hasOwnProperty, list.join('-'));\n\
+        data.gtmOnSuccess();";
+    let (engine, _) = engine_with(permitted_tag(src, json!({"logging": {}})), 200);
+    let r = engine.run(ga4_hit(HIT, ""));
+    assert_eq!(r.tags[0].outcome, "success", "{:?}", r.tags);
+    assert!(
+        r.logs
+            .iter()
+            .any(|l| l == "[t] mine 1 valueOf hasOwnProperty 6-4"),
+        "{:?}",
+        r.logs
+    );
+}
+
+#[test]
 fn a_long_log_line_in_any_script_is_cut_not_fatal() {
     let c = permitted_tag(
         "require('logToConsole')(data.text);\ndata.gtmOnSuccess();",

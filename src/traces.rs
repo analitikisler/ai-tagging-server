@@ -328,20 +328,58 @@ pub fn capture(req: &IncomingRequest) -> Value {
             (k.clone(), v)
         })
         .collect();
-    let mut cut = req.body.len().min(MAX_BODY);
-    while !req.body.is_char_boundary(cut) {
+    // A JSON body (an order webhook) can hold a name, an address or an
+    // e-mail under any key, so only its shape is kept. A form body keeps
+    // everything but the plain user data.
+    let whole = match json_shape(&req.body) {
+        Some(shape) => shape,
+        None => req
+            .body
+            .split('\n')
+            .map(mask_params)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    let mut cut = whole.len().min(MAX_BODY);
+    while !whole.is_char_boundary(cut) {
         cut -= 1;
     }
-    let body: Vec<String> = req.body[..cut].split('\n').map(mask_params).collect();
     json!({
         "method": req.method,
         "path": req.path,
         "query": mask_params(&req.query),
         "headers": headers,
-        "body": body.join("\n"),
-        "body_truncated": cut < req.body.len(),
+        "body": &whole[..cut],
+        "body_truncated": cut < whole.len(),
         "remote_address": req.remote_address,
     })
+}
+
+/// A JSON body with every value taken out: the keys and the kinds of value
+/// stay, so the debugger still shows what arrived. None for a body that
+/// isn't JSON. One that starts like JSON but doesn't parse is not kept at
+/// all, since nothing in it can be told apart.
+fn json_shape(body: &str) -> Option<String> {
+    let text = body.trim_start();
+    if !text.starts_with('{') && !text.starts_with('[') {
+        return None;
+    }
+    fn shape(v: &mut Value) {
+        match v {
+            Value::Object(m) => m.values_mut().for_each(shape),
+            Value::Array(a) => a.iter_mut().for_each(shape),
+            Value::String(_) => *v = json!("[text]"),
+            Value::Number(_) => *v = json!("[number]"),
+            Value::Bool(_) | Value::Null => {}
+        }
+    }
+    match serde_json::from_str::<Value>(text) {
+        Ok(mut v) => {
+            shape(&mut v);
+            Some(v.to_string())
+        }
+        Err(_) => Some(format!("[{} bytes, not kept]", body.len())),
+    }
 }
 
 /// Headers that carry the visitor's IP address.
@@ -551,7 +589,12 @@ pub fn mask_result(result: &mut Value) {
     if let Some(events) = result.get_mut("events").and_then(Value::as_array_mut) {
         for ev in events {
             if let Some(u) = ev.get_mut("user_data") {
-                mask_user_data(u);
+                // `ep.user_data=jane@example.com` makes it a plain string.
+                if u.is_string() || u.is_number() {
+                    *u = json!(MASKED);
+                } else {
+                    mask_user_data(u);
+                }
             }
             if let Some(Value::String(raw)) = ev.get_mut(RAW_HIT_KEY) {
                 *raw = mask_params(raw);
@@ -900,5 +943,45 @@ mod tests {
         assert_eq!(h[4][1], "Mozilla");
         assert_eq!(v["body"].as_str().unwrap().len(), MAX_BODY);
         assert_eq!(v["body_truncated"], true);
+    }
+
+    #[test]
+    fn a_json_body_keeps_its_shape_and_none_of_its_values() {
+        let req = IncomingRequest {
+            method: "POST".into(),
+            path: "/shopify/orders".into(),
+            body: r#"{"id":820982911946154508,"email":"jane@example.com","test":false,
+                "customer":{"first_name":"Jane","phone":"+491701234567"},
+                "line_items":[{"title":"Shirt","price":"19.90"}],"note":null}"#
+                .into(),
+            ..Default::default()
+        };
+        let v = capture(&req);
+        let body = v["body"].as_str().unwrap();
+        for plain in [
+            "jane@example.com",
+            "Jane",
+            "+491701234567",
+            "820982911946154508",
+        ] {
+            assert!(!body.contains(plain), "{plain}: {body}");
+        }
+        assert_eq!(
+            serde_json::from_str::<Value>(body).unwrap(),
+            json!({"id": "[number]", "email": "[text]", "test": false,
+                "customer": {"first_name": "[text]", "phone": "[text]"},
+                "line_items": [{"title": "[text]", "price": "[text]"}], "note": null})
+        );
+        // What only looks like JSON is not kept at all.
+        let broken = IncomingRequest {
+            body: r#"{"email":"jane@example.com""#.into(),
+            ..Default::default()
+        };
+        assert_eq!(capture(&broken)["body"], "[27 bytes, not kept]");
+
+        // A plain string where the user data object should be is masked too.
+        let mut result = json!({ "events": [{ "user_data": "jane@example.com" }] });
+        mask_result(&mut result);
+        assert_eq!(result["events"][0]["user_data"], MASKED);
     }
 }

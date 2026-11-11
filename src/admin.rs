@@ -188,7 +188,27 @@ pub fn router(admin: Admin) -> Router {
                 axum::routing::post(ai_transformation),
             );
     }
-    router.with_state(admin)
+    router
+        .layer(axum::middleware::from_fn_with_state(admin.clone(), gate))
+        .with_state(admin)
+}
+
+/// Turns away an API request without the token before any handler runs, so
+/// nothing of its body (up to 2 MB) is read or held while it waits for its
+/// answer. The alert check's own token is left to its handler.
+async fn gate(
+    State(a): State<Admin>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let path = req.uri().path();
+    if path.starts_with("/admin/api/")
+        && path != "/admin/api/alerts/check"
+        && let Err(r) = authorize(&a, req.headers()).await
+    {
+        return *r;
+    }
+    next.run(req).await
 }
 
 /// The console with each asset's URL carrying a hash of its content
@@ -1283,6 +1303,20 @@ async fn live_start(State(a): State<Admin>, headers: HeaderMap, body: Bytes) -> 
         return error(StatusCode::BAD_REQUEST, "there is no draft to preview");
     }
     let now = crate::state::now_ms();
+    // Sessions that have run out go as new ones start, so they don't pile up.
+    for name in a.state.list("checkup") {
+        if !name.starts_with("live-") {
+            continue;
+        }
+        let rel = format!("checkup/{name}");
+        let over = a
+            .state
+            .read(&rel)
+            .is_none_or(|s| s["since"].as_u64().unwrap_or(0) + crate::server::PREVIEW_MS < now);
+        if over {
+            a.state.remove(&rel);
+        }
+    }
     // The code decides which browser runs the draft, so it is random, not
     // made from the time.
     let code = format!("{:08x}", crate::store::unique() as u32);

@@ -12,12 +12,29 @@ use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 /// containers) never write into each other's file. Only the owner can read
 /// the file, since it can hold access tokens.
 pub fn save(path: &Path, text: &str) -> Result<(), String> {
+    replace(path, text, None)
+}
+
+/// Like `save`, for a file people also edit by hand: the new file keeps the
+/// permissions of the one it replaces, so whoever could read and edit it
+/// before still can.
+pub fn save_keeping_permissions(path: &Path, text: &str) -> Result<(), String> {
+    let keep = std::fs::metadata(path).ok().map(|m| m.permissions());
+    replace(path, text, keep)
+}
+
+fn replace(path: &Path, text: &str, keep: Option<std::fs::Permissions>) -> Result<(), String> {
     let tmp = path.with_file_name(format!(
         "{}.{:016x}.tmp",
         path.file_name().unwrap_or_default().to_string_lossy(),
         unique()
     ));
-    let written = write_private(&tmp, text).and_then(|()| std::fs::rename(&tmp, path));
+    let written = write_private(&tmp, text)
+        .and_then(|()| match keep {
+            Some(permissions) => std::fs::set_permissions(&tmp, permissions),
+            None => Ok(()),
+        })
+        .and_then(|()| std::fs::rename(&tmp, path));
     if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);
         return Err(format!("{}: {e}", path.display()));

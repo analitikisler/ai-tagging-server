@@ -35,8 +35,8 @@
       const i = pair.indexOf('=');
       const k = decode(i < 0 ? pair : pair.slice(0, i));
       const v = decode(i < 0 ? '' : pair.slice(i + 1));
-      if (k === undefined) return;
-      if (!(k in out)) out[k] = v;
+      if (k === undefined || k === '__proto__') return;
+      if (!hasOwn(out, k)) out[k] = v;
       else if (Array.isArray(out[k])) out[k].push(v);
       else out[k] = [out[k], v];
     });
@@ -176,7 +176,11 @@
 
   // --- URLs -----------------------------------------------------------------
   const parseUrl = (url) => {
-    const m = /^([a-z][a-z0-9+.-]*:)\/\/(?:([^:@/]*)(?::([^@/]*))?@)?([^:/?#]*)(?::(\d+))?([^?#]*)(\?[^#]*)?(#.*)?$/i.exec(String(url));
+    // The user and password stop at the path, query or fragment, so an `@`
+    // in a query isn't read as one; the path starts with a slash and the
+    // fragment takes any character, so no part can be read two ways and a
+    // long address costs no more than its length.
+    const m = /^([a-z][a-z0-9+.-]*:)\/\/(?:([^:@/?#]*)(?::([^@/?#]*))?@)?([^:/?#]*)(?::(\d+))?(\/[^?#]*)?(\?[^#]*)?(#[\s\S]*)?$/i.exec(String(url));
     if (!m) return undefined;
     const protocol = m[1].toLowerCase();
     const hostname = m[4].toLowerCase();
@@ -209,7 +213,8 @@
     let v = currentEvent();
     const parts = String(keyPath).split('.');
     for (let i = 0; i < parts.length; i++) {
-      if (v === null || typeof v !== 'object') return undefined;
+      // Only what the event itself holds: `constructor` is not event data.
+      if (v === null || typeof v !== 'object' || !hasOwn(v, parts[i])) return undefined;
       v = v[parts[i]];
     }
     return v;
@@ -571,6 +576,49 @@
       if (done) done();
     }
   };
+
+  // A template loaded from a file runs with the built-ins sealed: it can't
+  // change what `[].map` or `''.split` do for the code above, which the
+  // permission checks and the APIs lean on. Built-in templates skip this;
+  // they hold every permission anyway.
+  if (grants) {
+    const seal = (o) => {
+      if (o !== null && (typeof o === 'object' || typeof o === 'function')) Object.freeze(o);
+    };
+    const chain = (o) => {
+      for (let p = o; p !== null && p !== undefined; p = Object.getPrototypeOf(p)) {
+        seal(p);
+        if (typeof p === 'function') seal(p.prototype);
+      }
+    };
+    // Assigning a name Object.prototype also has (`out.constructor = 1`, or
+    // `map[key] = v` with a key called toString) must go on working once it
+    // is frozen, so those names become accessors that put the value on the
+    // object assigned to.
+    const base = Object.prototype;
+    Object.getOwnPropertyNames(base).forEach((name) => {
+      const d = Object.getOwnPropertyDescriptor(base, name);
+      if (!d || !hasOwn(d, 'value') || !d.configurable) return;
+      const value = d.value;
+      Object.defineProperty(base, name, {
+        get() { return value; },
+        set(v) {
+          if (this === base) throw new TypeError('Object.prototype can not be changed');
+          Object.defineProperty(this, name, { value: v, writable: true, enumerable: true, configurable: true });
+        },
+        enumerable: false,
+        configurable: false,
+      });
+    });
+    // Everything the code above calls on a value: the makers of objects,
+    // arrays, strings, numbers, functions, regular expressions, promises and
+    // errors, and what `for...of` and spreading run on.
+    [
+      Object, Array, String, Number, Boolean, RegExp, Promise, Error,
+      function () {}, async function () {},
+      [][Symbol.iterator](), ''[Symbol.iterator](),
+    ].forEach(chain);
+  }
 
   return { require, data, dispatch };
 })

@@ -95,7 +95,26 @@ impl Pool {
                                 engines.len() - 1
                             }
                         };
-                        let _ = reply.send(engines[at].1.run(req));
+                        // A panic inside a run must not take the thread
+                        // with it: the pool would shrink for good.
+                        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            engines[at].1.run(req)
+                        }));
+                        match run {
+                            Ok(result) => {
+                                let _ = reply.send(result);
+                            }
+                            Err(_) => {
+                                tracing::error!(
+                                    "worker js-{i}: a run panicked; the hit is refused and the runtime replaced"
+                                );
+                                // The runtime stopped half-way through a run:
+                                // it is left alone rather than torn down, and
+                                // the next hit builds a new one. Dropping
+                                // `reply` answers this hit.
+                                std::mem::forget(engines.remove(at));
+                            }
+                        }
                     }
                 })
                 .expect("spawn worker");
@@ -348,7 +367,7 @@ pub struct App {
 /// The cookie that keeps a browser on the draft while it previews.
 pub const PREVIEW_COOKIE: &str = "_sst_check";
 /// How long a preview session lasts.
-const PREVIEW_MS: u64 = 4 * 3_600_000;
+pub(crate) const PREVIEW_MS: u64 = 4 * 3_600_000;
 
 /// The preview session a request belongs to, by the code on the page's
 /// address (`sst_check=<code>` in the hit's `dl`) or the preview cookie,
@@ -496,6 +515,11 @@ async fn handle(
                 .iter()
                 .any(|(k, v)| k == "x-debug-token" && same(v.trim(), t))
         });
+    // Like the proxy's secret, the token is not for templates to read.
+    let headers: Vec<(String, String)> = headers
+        .into_iter()
+        .filter(|(k, _)| k != "x-debug-token")
+        .collect();
 
     let method = parts.method.as_str().to_string();
     let path = parts.uri.path().to_string();
