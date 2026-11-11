@@ -14,13 +14,14 @@ pub(crate) use host::bigquery_insert_url;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use rquickjs::module::WriteOptions;
 use rquickjs::{Context, Ctx, Function, Module, Object, Persistent, Runtime, Value as JsValue};
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::container::{Container, Trigger};
 
@@ -125,6 +126,11 @@ pub struct SendRecord {
 }
 
 pub type Storage = Arc<Mutex<HashMap<String, HashMap<String, String>>>>;
+
+/// Compiled templates by a digest of their name and source, shared by every
+/// runtime in the process.
+static COMPILED: LazyLock<Mutex<HashMap<[u8; 32], &'static [u8]>>> =
+    LazyLock::new(Default::default);
 
 pub struct Engine {
     rt: Runtime,
@@ -245,15 +251,43 @@ impl Engine {
             // live for the rest of the process.
             Some(bytes) => unsafe { Module::load(ctx.clone(), bytes)? },
             None => {
-                let m = Module::declare(ctx.clone(), key, format!("export default {expr};"))?;
-                let bytes = m.write(WriteOptions {
-                    strip_debug: true,
-                    ..Default::default()
-                })?;
-                self.code
-                    .borrow_mut()
-                    .insert(key.to_string(), Box::leak(bytes.into_boxed_slice()));
-                m
+                // The same source compiles to the same bytecode in every
+                // runtime, so it is compiled, and kept for good, once a
+                // process: a worker building a runtime for the hundredth
+                // tenant, or again after an edit, adds nothing.
+                let id: [u8; 32] = {
+                    let mut h = Sha256::new();
+                    h.update(key.as_bytes());
+                    h.update([0]);
+                    h.update(expr.as_bytes());
+                    h.finalize().into()
+                };
+                let known = COMPILED.lock().expect("compiled").get(&id).copied();
+                match known {
+                    Some(bytes) => {
+                        self.code.borrow_mut().insert(key.to_string(), bytes);
+                        // SAFETY: as above.
+                        unsafe { Module::load(ctx.clone(), bytes)? }
+                    }
+                    None => {
+                        let m =
+                            Module::declare(ctx.clone(), key, format!("export default {expr};"))?;
+                        let bytes: &'static [u8] = Box::leak(
+                            m.write(WriteOptions {
+                                strip_debug: true,
+                                ..Default::default()
+                            })?
+                            .into_boxed_slice(),
+                        );
+                        let bytes = *COMPILED
+                            .lock()
+                            .expect("compiled")
+                            .entry(id)
+                            .or_insert(bytes);
+                        self.code.borrow_mut().insert(key.to_string(), bytes);
+                        m
+                    }
+                }
             }
         };
         let (module, promise) = module.eval()?;
