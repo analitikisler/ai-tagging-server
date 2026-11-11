@@ -624,8 +624,8 @@ async fn handle(
 
     if debug {
         // Plain user data is masked here as in traces.
-        let mut report = serde_json::to_value(&result).unwrap_or_default();
-        traces::mask_result(&mut report);
+        let mut report = result.clone();
+        traces::mask_run(&mut report);
         return (
             [("content-type", "application/json")],
             serde_json::to_string_pretty(&report).unwrap_or_default(),
@@ -1075,9 +1075,9 @@ mod tests {
             "a dry preview sends nothing"
         );
         let t = admin.traces.details(None);
-        assert_eq!(t[0].1["tenant"], "preview");
+        assert_eq!(t[0].1.tenant.as_deref(), Some("preview"));
         assert_eq!(
-            t[0].1["result"]["tags"].as_array().unwrap().len(),
+            t[0].1.result.as_ref().unwrap().tags.len(),
             2,
             "the draft ran"
         );
@@ -1085,7 +1085,10 @@ mod tests {
         hit("https%3A%2F%2Fshop%2Fp2", Some("_sst_check=ab12cd34"))
             .await
             .unwrap();
-        assert_eq!(admin.traces.details(None)[0].1["tenant"], "preview");
+        assert_eq!(
+            admin.traces.details(None)[0].1.tenant.as_deref(),
+            Some("preview")
+        );
         assert_eq!(sent.0.lock().unwrap().len(), 1);
         // A new link wins over the cookie an expired preview left behind.
         state
@@ -1100,7 +1103,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(admin.traces.details(None)[0].1["tenant"], "preview");
+        assert_eq!(
+            admin.traces.details(None)[0].1.tenant.as_deref(),
+            Some("preview")
+        );
         assert_eq!(sent.0.lock().unwrap().len(), 1);
         // An unknown code is an ordinary visitor.
         hit("https%3A%2F%2Fshop%2F", Some("_sst_check=00000000"))
@@ -1124,7 +1130,7 @@ mod tests {
                 .is_none_or(|c| { !c.to_str().unwrap().starts_with("_sst_check=") })
         );
         assert_eq!(sent.0.lock().unwrap().len(), 3);
-        assert!(admin.traces.details(None)[0].1["tenant"].is_null());
+        assert!(admin.traces.details(None)[0].1.tenant.is_none());
         std::fs::remove_dir_all(dir).ok();
     }
 }

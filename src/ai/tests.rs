@@ -10,6 +10,7 @@ use axum::routing::post;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::traces::Record;
 
 /// A stand-in for the Anthropic API: answers from a queue and keeps every
 /// request it got.
@@ -309,7 +310,7 @@ fn hit(
     events: &[&str],
     runs: &[(&str, usize)],
     sends: &[(&str, &str, Result<u16, &str>)],
-) -> (u64, Value) {
+) -> (u64, Arc<Record>) {
     let sends: Vec<Value> = sends
         .iter()
         .map(|(from, url, r)| {
@@ -322,18 +323,18 @@ fn hit(
         .collect();
     (
         id,
-        json!({
+        Record::of(json!({
             "at": 1_000 + id,
             "result": {
                 "events": events.iter().map(|e| json!({ "event_name": e })).collect::<Vec<_>>(),
                 "tags": runs.iter().map(|(t, e)| json!({ "tag": t, "event": e, "outcome": "success", "error": null })).collect::<Vec<_>>(),
                 "sends": sends,
             }
-        }),
+        })),
     )
 }
 
-fn sample_hits() -> Vec<(u64, Value)> {
+fn sample_hits() -> Vec<(u64, Arc<Record>)> {
     let ga = "https://region1.google-analytics.com/g/collect?v=2";
     let meta = "https://graph.facebook.com/v21.0/1/events";
     let mut hits = Vec::new();
@@ -361,7 +362,10 @@ fn sample_hits() -> Vec<(u64, Value)> {
         ));
     }
     // A refused hit: no result.
-    hits.push((5, json!({ "at": 1_005, "status": 503, "result": null })));
+    hits.push((
+        5,
+        Record::of(json!({ "at": 1_005, "status": 503, "result": null })),
+    ));
     hits
 }
 
@@ -447,7 +451,7 @@ async fn an_audit_without_hits_asks_nothing() {
     let fake = Fake::default();
     let base = fake.start().await;
     let ai = ai(&base, "claude-opus-5-5", 10);
-    let only_refused = vec![(1, json!({ "result": null }))];
+    let only_refused = vec![(1, Record::of(json!({ "result": null })))];
     assert_eq!(
         audit::audit(&ai, &only_refused, &container(), 0, None).await,
         Err(AiError::NoHits)
@@ -472,7 +476,7 @@ fn the_ai_never_gets_the_visitors_ip() {
             "logs": (0..150).map(|i| json!(format!("line {i}"))).collect::<Vec<_>>(),
         }
     });
-    let t = crate::traces::for_ai(&detail);
+    let t = crate::traces::for_ai(&Record::of(detail));
     let text = t.to_string();
     assert!(!text.contains("203.0.113.9"), "{text}");
     assert_eq!(t["request"]["query"], "v=2&en=page_view");

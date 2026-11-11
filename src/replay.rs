@@ -417,8 +417,9 @@ pub fn pinned_entry(
     label: &str,
     tenant: Option<&str>,
     at: u64,
-    request: &Value,
+    request: &crate::traces::Captured,
 ) -> Value {
+    let request = serde_json::to_value(request).unwrap_or_default();
     let mut m = Map::new();
     for k in [
         "method",

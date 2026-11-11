@@ -2899,11 +2899,8 @@ fn outcomes_keep_the_words_traces_and_the_console_know() {
     ] {
         assert_eq!(json!(outcome), word);
         assert_eq!(outcome.to_string(), word);
-        assert_eq!(RunKind::parse(word).map(RunKind::as_str), Some(word));
     }
     assert_eq!(json!(RunKind::Exception), "exception");
-    assert_eq!(RunKind::parse("exception"), Some(RunKind::Exception));
-    assert_eq!(RunKind::parse("done"), None);
 
     // A failure that threw is an exception; one the tag reported is not.
     let run = |outcome, error: Option<&str>| TagRun {
@@ -2918,7 +2915,7 @@ fn outcomes_keep_the_words_traces_and_the_console_know() {
         RunKind::Exception
     );
     assert_eq!(run(TagOutcome::Failure, None).kind(), RunKind::Failure);
-    // And a trace read back says the same as the run it was made from.
+    // And a run read back from a trace is the run that was kept.
     for r in [
         run(TagOutcome::Success, None),
         run(TagOutcome::Failure, None),
@@ -2926,11 +2923,12 @@ fn outcomes_keep_the_words_traces_and_the_console_know() {
         run(TagOutcome::Skipped, None),
         run(TagOutcome::Timeout, None),
     ] {
-        assert_eq!(RunKind::of_trace(&json!(r)), Some(r.kind()));
+        let back: TagRun = serde_json::from_value(json!(r)).unwrap();
+        assert_eq!((back.outcome, back.kind()), (r.outcome, r.kind()));
     }
-    assert_eq!(RunKind::of_trace(&json!({ "outcome": "done" })), None);
+    assert!(serde_json::from_value::<TagRun>(json!({ "tag": "t", "outcome": "done" })).is_err());
 
     // Only a failure, an exception or a timeout went wrong.
-    assert!(!TagOutcome::Skipped.went_wrong() && !RunKind::Skipped.went_wrong());
-    assert!(TagOutcome::Timeout.went_wrong() && RunKind::Exception.went_wrong());
+    assert!(!TagOutcome::Skipped.went_wrong() && !TagOutcome::Success.went_wrong());
+    assert!(TagOutcome::Timeout.went_wrong() && TagOutcome::Failure.went_wrong());
 }

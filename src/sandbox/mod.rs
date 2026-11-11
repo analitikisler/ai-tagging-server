@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use rquickjs::module::WriteOptions;
 use rquickjs::{Context, Ctx, Function, Module, Object, Persistent, Runtime, Value as JsValue};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -75,7 +75,8 @@ pub trait Transport: Send + Sync {
     fn send_all(&self, requests: Vec<Outgoing>) -> Vec<Result<SendResult, String>>;
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Response {
     pub status: u16,
     pub headers: Vec<(String, String)>,
@@ -84,7 +85,9 @@ pub struct Response {
 }
 
 /// What happened during a run: the response, plus what the debug view shows.
-#[derive(Debug, Default, Serialize)]
+/// It can be read back, since a trace keeps one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RunResult {
     pub claimed_by: Option<String>,
     pub client_error: Option<String>,
@@ -101,7 +104,7 @@ pub struct RunResult {
 
 /// How a tag's run ended. Every place that counts or shows runs matches on
 /// this, so an ending added here can't be left out of one of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TagOutcome {
     /// The tag called `gtmOnSuccess`.
@@ -153,8 +156,7 @@ impl std::fmt::Display for TagOutcome {
 }
 
 /// A run as people are shown it: a failure that threw is told apart from
-/// one the tag reported itself. Traces keep these words, and whatever reads
-/// a trace reads them back with `parse`.
+/// one the tag reported itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RunKind {
@@ -176,36 +178,6 @@ impl RunKind {
         }
     }
 
-    pub fn parse(word: &str) -> Option<Self> {
-        [
-            RunKind::Success,
-            RunKind::Failure,
-            RunKind::Exception,
-            RunKind::Skipped,
-            RunKind::Timeout,
-        ]
-        .into_iter()
-        .find(|k| k.as_str() == word)
-    }
-
-    /// A run as a trace keeps it: `{ "outcome": ..., "error": ... }`. None
-    /// when the outcome is missing or not a word this server writes.
-    pub fn of_trace(run: &Value) -> Option<Self> {
-        let kind = Self::parse(run["outcome"].as_str()?)?;
-        Some(match kind {
-            RunKind::Failure if run["error"].is_string() => RunKind::Exception,
-            other => other,
-        })
-    }
-
-    /// Whether the run went wrong: failed, threw or timed out.
-    pub fn went_wrong(self) -> bool {
-        match self {
-            RunKind::Success | RunKind::Skipped => false,
-            RunKind::Failure | RunKind::Exception | RunKind::Timeout => true,
-        }
-    }
-
     /// The status `addEventCallback` reports for the run. sGTM has no word
     /// for a skipped run, so it reads as a success there.
     fn sgtm_status(self) -> &'static str {
@@ -218,9 +190,10 @@ impl RunKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagRun {
     pub tag: String,
+    #[serde(default)]
     pub event: usize,
     pub outcome: TagOutcome,
     pub error: Option<String>,
@@ -241,10 +214,13 @@ impl TagRun {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendRecord {
+    #[serde(default)]
     pub from: String,
+    #[serde(default)]
     pub method: String,
+    #[serde(default)]
     pub url: String,
     pub result: Result<u16, String>,
     /// The start of the answer when the vendor refused the send, so a wrong
