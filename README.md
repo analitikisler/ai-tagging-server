@@ -105,6 +105,7 @@ With `DEBUG_TOKEN` set, add `__debug` to any hit and send the token in an `x-deb
 | `AI_BASE_URL` | `https://api.anthropic.com` | Where AI calls go, for a gateway or proxy in front of the Anthropic API. |
 | `GOOGLE_AUTH` | `auto` | Where the Google access token for [BigQuery inserts](docs/bigquery-export.md#3-server-settings) comes from: `auto`, `key`, `metadata` or `off`. `auto` uses the key file when `GOOGLE_APPLICATION_CREDENTIALS` is set, else the metadata server on Cloud Run, else nothing. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | none | Path to a service account key file, for BigQuery inserts from a host outside Google Cloud. |
+| `SERVER_HEADER` | `1` | Adds `x-tagging-server: ai-tagging-server` to every tracking response, so a debugger such as [ai tag debugger](https://github.com/analitikisler/ai-tag-debugger) can tell which server container a site runs and show its hits as this server's. No version or setting is sent. `0` leaves it out. |
 | `DEBUG_TOKEN` | off | Enables the `__debug` report. At least 16 characters. Accepted only in the `x-debug-token` header, so it never appears in URL logs. |
 | `OUTGOING_ALLOW_PRIVATE` | `0` | `1` allows sends to private and internal addresses. Otherwise every address a name resolves to is checked when connecting, redirects aren't followed, and `HTTP_PROXY`/`HTTPS_PROXY` are ignored. |
 | `SEND_RETRIES` | `1` | Extra attempts for an outgoing send after a failed connection or a 502, 503 or 504 answer (max 5). Timeouts aren't retried, and all attempts stay within the request's time budget. |
