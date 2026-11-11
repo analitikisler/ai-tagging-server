@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::sandbox::RunResult;
+use crate::sandbox::{RunResult, TagOutcome};
 use crate::state::{State, now_ms};
 
 pub const QUARTER_S: u64 = 900;
@@ -117,16 +117,18 @@ impl Counts {
             let c = self.tags.entry(t.tag.clone()).or_default();
             c.runs += 1;
             match t.outcome {
-                "success" => {}
-                "skipped" => c.skipped += 1,
-                _ => c.failed += 1,
+                TagOutcome::Success => {}
+                TagOutcome::Skipped => c.skipped += 1,
+                TagOutcome::Failure | TagOutcome::Timeout => c.failed += 1,
             }
         }
         for s in &r.sends {
             let c = self.hosts.entry(host_of(&s.url).to_string()).or_default();
             c.sends += 1;
+            if s.accepted() {
+                continue;
+            }
             let error = match &s.result {
-                Ok(status) if *status < 400 => continue,
                 Ok(status) => status.to_string(),
                 Err(e) => e.chars().take(80).collect(),
             };
@@ -365,7 +367,11 @@ mod tests {
             tags: vec![TagRun {
                 tag: "Meta".into(),
                 event: 0,
-                outcome: if tag_ok { "success" } else { "failure" },
+                outcome: if tag_ok {
+                    TagOutcome::Success
+                } else {
+                    TagOutcome::Failure
+                },
                 error: None,
                 skip: None,
             }],
@@ -397,7 +403,7 @@ mod tests {
         // A tag that skipped its event didn't fail.
         let mut skipped = hit(json!({ "event_name": "scroll" }), true, Ok(200));
         skipped.tags[0].tag = "TikTok".into();
-        skipped.tags[0].outcome = "skipped";
+        skipped.tags[0].outcome = TagOutcome::Skipped;
         skipped.events.clear();
         skipped.sends.clear();
         c.add(&skipped);

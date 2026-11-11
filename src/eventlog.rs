@@ -126,7 +126,7 @@ fn summarize_event(e: &Value) -> EventSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sandbox::{Response, SendRecord};
+    use crate::sandbox::{Response, SendRecord, TagOutcome};
     use serde_json::json;
 
     fn hit(events: Vec<Value>, status: u16) -> RunResult {
@@ -140,7 +140,7 @@ mod tests {
             tags: vec![TagRun {
                 tag: "Meta Conversions API".into(),
                 event: 0,
-                outcome: "skipped",
+                outcome: TagOutcome::Skipped,
                 error: None,
                 skip: Some("consent:ad_storage=denied".into()),
             }],

@@ -11,11 +11,12 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::mpv2::RAW_HIT_KEY;
 use crate::request::IncomingRequest;
-use crate::sandbox::RunResult;
+use crate::sandbox::{RunKind, RunResult};
 
 pub const DEFAULT_CAPACITY: usize = 200;
 pub const MAX_CAPACITY: usize = 2000;
@@ -133,10 +134,7 @@ impl Traces {
                     ("client_error".into(), Value::Null),
                     ("error".into(), json!(error)),
                     ("events".into(), json!([])),
-                    (
-                        "tags".into(),
-                        json!({"success": 0, "failure": 0, "timeout": 0, "exception": 0, "skipped": 0}),
-                    ),
+                    ("tags".into(), json!(Tally::default())),
                     ("tag_runs".into(), json!([])),
                     ("sends".into(), json!({"ok": 0, "failed": 0})),
                     ("has_error".into(), json!(true)),
@@ -154,39 +152,28 @@ impl Traces {
                 search.extend(names.iter().map(|n| n.to_string()));
                 search.extend(r.claimed_by.iter().cloned());
                 search.extend(r.client_error.iter().cloned());
-                let (mut success, mut failure, mut timeout, mut exception) = (0, 0, 0, 0);
-                // Tags that chose not to send: neither a success nor an error.
-                let mut skipped = 0;
+                let mut tally = Tally::default();
                 let mut runs = Vec::with_capacity(r.tags.len());
                 for t in &r.tags {
                     // A tag that threw keeps the error; one that failed on its own has none.
-                    let outcome = match (t.outcome, &t.error) {
-                        ("failure", Some(_)) => "exception",
-                        (o, _) => o,
-                    };
-                    match outcome {
-                        "success" => success += 1,
-                        "failure" => failure += 1,
-                        "exception" => exception += 1,
-                        "skipped" => skipped += 1,
-                        _ => timeout += 1,
-                    }
-                    runs.push(json!({"tag": t.tag, "event": t.event, "outcome": outcome}));
+                    let kind = t.kind();
+                    tally.add(kind);
+                    runs.push(json!({"tag": t.tag, "event": t.event, "outcome": kind}));
                     search.push(t.tag.clone());
                     search.extend(t.error.iter().cloned());
                 }
                 let mut ok = 0;
                 for s in &r.sends {
-                    match &s.result {
-                        Ok(status) if *status < 400 => ok += 1,
-                        Ok(_) => {}
-                        Err(e) => search.push(e.clone()),
+                    if s.accepted() {
+                        ok += 1;
+                    } else if let Err(e) = &s.result {
+                        search.push(e.clone());
                     }
                     search.push(host_of(&s.url).to_string());
                 }
                 let failed = r.sends.len() - ok;
                 let has_error = r.client_error.is_some()
-                    || success + skipped != r.tags.len()
+                    || tally.went_wrong() > 0
                     || failed > 0
                     || r.response.status >= 500;
                 summary.extend([
@@ -195,10 +182,7 @@ impl Traces {
                     ("client_error".into(), json!(r.client_error)),
                     ("error".into(), Value::Null),
                     ("events".into(), json!(names)),
-                    (
-                        "tags".into(),
-                        json!({"success": success, "failure": failure, "timeout": timeout, "exception": exception, "skipped": skipped}),
-                    ),
+                    ("tags".into(), json!(tally)),
                     ("tag_runs".into(), Value::Array(runs)),
                     ("sends".into(), json!({"ok": ok, "failed": failed})),
                     ("has_error".into(), json!(has_error)),
@@ -393,6 +377,33 @@ fn json_shape(body: &str) -> Option<String> {
             Some(v.to_string())
         }
         Err(_) => Some(format!("[{} bytes, not kept]", body.len())),
+    }
+}
+
+/// How many of a hit's tag runs ended each way, as the hit list shows them.
+#[derive(Debug, Default, Serialize)]
+struct Tally {
+    success: u32,
+    failure: u32,
+    timeout: u32,
+    exception: u32,
+    skipped: u32,
+}
+
+impl Tally {
+    fn add(&mut self, kind: RunKind) {
+        *match kind {
+            RunKind::Success => &mut self.success,
+            RunKind::Failure => &mut self.failure,
+            RunKind::Timeout => &mut self.timeout,
+            RunKind::Exception => &mut self.exception,
+            RunKind::Skipped => &mut self.skipped,
+        } += 1;
+    }
+
+    /// Runs that failed, threw or timed out.
+    fn went_wrong(&self) -> u32 {
+        self.failure + self.timeout + self.exception
     }
 }
 
@@ -677,7 +688,7 @@ fn cookie_names(header: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sandbox::{SendRecord, TagRun};
+    use crate::sandbox::{SendRecord, TagOutcome, TagRun};
 
     fn hit(path: &str) -> Value {
         capture(&IncomingRequest {
@@ -786,9 +797,9 @@ mod tests {
             claimed_by: Some("GA4".into()),
             events: vec![json!({"event_name": "purchase"})],
             tags: vec![
-                tag("GA4", "success", None),
-                tag("Meta Conversions API", "failure", None),
-                tag("Broken", "failure", Some("x is not defined")),
+                tag("GA4", TagOutcome::Success, None),
+                tag("Meta Conversions API", TagOutcome::Failure, None),
+                tag("Broken", TagOutcome::Failure, Some("x is not defined")),
             ],
             sends: vec![SendRecord {
                 from: "GA4".into(),
@@ -825,8 +836,8 @@ mod tests {
             claimed_by: Some("GA4".into()),
             events: vec![json!({"event_name": "page_view"})],
             tags: vec![
-                tag("GA4", "success", None),
-                tag("TikTok Events API", "skipped", None),
+                tag("GA4", TagOutcome::Success, None),
+                tag("TikTok Events API", TagOutcome::Skipped, None),
             ],
             ..Default::default()
         };

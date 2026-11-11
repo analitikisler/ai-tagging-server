@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 
-use crate::sandbox::RunResult;
+use crate::sandbox::{RunResult, TagOutcome};
 
 /// Upper bounds, in milliseconds, of the latency buckets; a last bucket
 /// takes everything slower.
@@ -72,17 +72,18 @@ impl Metrics {
         self.events.fetch_add(r.events.len() as u64, Relaxed);
         for t in &r.tags {
             match t.outcome {
-                "success" => &self.tags_success,
-                "failure" => &self.tags_failure,
-                "skipped" => &self.tags_skipped,
-                _ => &self.tags_timeout,
+                TagOutcome::Success => &self.tags_success,
+                TagOutcome::Failure => &self.tags_failure,
+                TagOutcome::Skipped => &self.tags_skipped,
+                TagOutcome::Timeout => &self.tags_timeout,
             }
             .fetch_add(1, Relaxed);
         }
         for s in &r.sends {
-            match &s.result {
-                Ok(status) if *status < 400 => &self.sends_ok,
-                _ => &self.sends_failed,
+            if s.accepted() {
+                &self.sends_ok
+            } else {
+                &self.sends_failed
             }
             .fetch_add(1, Relaxed);
         }

@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde_json::{Value, json};
 
+use crate::sandbox::RunKind;
+
 use super::{
     Ai, AiError, Ask, change_properties, language, parse_change, server_prompt, tag_names,
 };
@@ -165,19 +167,17 @@ pub fn count(traces: &[(u64, Value)], container: &Value, retries: u64) -> Counts
                 .cloned()
                 .unwrap_or_else(|| "(no name)".into());
             let error = run["error"].as_str();
-            let outcome = match (run["outcome"].as_str().unwrap_or_default(), error) {
-                ("failure", Some(_)) => "exception",
-                (o, _) => o,
-            };
+            let kind = RunKind::of_trace(run);
             let c = tags.entry(tag.clone()).or_default();
             c.runs += 1;
-            *c.outcomes.entry(outcome.to_string()).or_default() += 1;
+            let word = kind.map_or("unknown", RunKind::as_str);
+            *c.outcomes.entry(word.to_string()).or_default() += 1;
             *c.fired_for.entry(event.clone()).or_default() += 1;
             if c.samples.len() < SAMPLES && !c.samples.contains(id) {
                 c.samples.push(*id);
             }
             // A run that skipped its event sent nothing, so no send is its.
-            if outcome != "skipped" {
+            if kind != Some(RunKind::Skipped) {
                 *runs_here
                     .entry(tag.clone())
                     .or_default()
