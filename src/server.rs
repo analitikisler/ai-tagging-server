@@ -19,7 +19,7 @@ use tokio::sync::oneshot;
 
 use crate::admin::{self, Admin};
 use crate::container_file::ContainerFile;
-use crate::eventlog::{EventLog, without_queries};
+use crate::eventlog::without_queries;
 use crate::google::GoogleAuth;
 use crate::integrations::Integrations;
 use crate::metrics::METRICS;
@@ -360,8 +360,6 @@ pub struct App {
     pub proxy_secret: Option<String>,
     /// Counts per quarter hour for the alerts, with the admin console on.
     pub counts: Option<Arc<crate::counts::Recorder>>,
-    /// Recent hits for the admin page, when it shows them.
-    pub log: Option<Arc<EventLog>>,
 }
 
 /// The cookie that keeps a browser on the draft while it previews.
@@ -608,9 +606,6 @@ async fn handle(
     // Preview hits stay out of the counts that alerts and checks read.
     if let Some(c) = app.counts.as_ref().filter(|_| preview.is_none()) {
         c.record(tenant_id.as_deref().unwrap_or(""), &result);
-    }
-    if let Some(log) = &app.log {
-        log.record(&path, &result, elapsed, false);
     }
     let mode = if preview.is_some() { "preview " } else { "" };
     tracing::info!("{mode}{method} {path} -> {}", summarize(&result));
@@ -1009,7 +1004,6 @@ mod tests {
         let pool = Arc::new(pool);
         let admin = Admin {
             pool: pool.clone(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: "t".repeat(32),
@@ -1031,7 +1025,6 @@ mod tests {
         };
         let app = App {
             pool,
-            log: None,
             target: Target::Single(file),
             admin: Some(admin.clone()),
             debug_token: None,

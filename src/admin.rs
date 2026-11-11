@@ -23,7 +23,6 @@ use crate::alerts::{Alerts, Config as AlertConfig, Context as AlertContext};
 use crate::checkup;
 use crate::container::{Condition, Container, Tag, compile_conditions};
 use crate::container_file::{Change, ContainerFile, EditError};
-use crate::eventlog::{CAPACITY, EventLog};
 use crate::history::{self, Before, History};
 use crate::integrations::{Enrichment, Integrations, TestOverrides, test_event};
 use crate::metrics::{self, METRICS};
@@ -90,8 +89,6 @@ pub struct Admin {
     pub drafts: Option<Arc<crate::drafts::Drafts>>,
     /// Runs test events.
     pub pool: Arc<Pool>,
-    /// Recent hits; the server records into it in integrations mode.
-    pub log: Arc<EventLog>,
 }
 
 pub fn router(admin: Admin) -> Router {
@@ -170,8 +167,7 @@ pub fn router(admin: Admin) -> Router {
                 "/admin/api/integrations/{id}/test",
                 axum::routing::post(send_test),
             )
-            .route("/admin/api/enrichment", axum::routing::put(save_enrichment))
-            .route("/admin/api/events", get(events));
+            .route("/admin/api/enrichment", axum::routing::put(save_enrichment));
     }
     if admin.ai.is_some() {
         router = router
@@ -1153,10 +1149,10 @@ async fn alerts_test(State(a): State<Admin>, headers: HeaderMap) -> Response {
 fn replay_hits(a: &Admin, tenant: Option<&str>) -> Vec<Hit> {
     let mut hits: Vec<Hit> = a
         .traces
-        .details(tenant)
+        .details_where(tenant, replay::MAX_HITS, |t| {
+            t.get("result").is_some_and(|r| !r.is_null())
+        })
         .into_iter()
-        .filter(|(_, t)| !t["result"].is_null())
-        .take(replay::MAX_HITS)
         .filter_map(|(id, t)| {
             Some(Hit {
                 trace: Some(id),
@@ -1387,7 +1383,10 @@ async fn live_view(
     ok(checkup::live(
         &code,
         since,
-        &a.traces.details(None),
+        // Polled every few seconds: only the hits since the check began.
+        &a.traces.details_where(None, usize::MAX, |t| {
+            t.get("at").and_then(Value::as_u64).unwrap_or(0) >= since
+        }),
         &container,
         &pixels,
     ))
@@ -1473,9 +1472,8 @@ async fn checkup_view(
     .unwrap_or_default();
     let hits: Vec<Value> = a
         .traces
-        .details(tenant)
+        .details_where(tenant, 200, |_| true)
         .into_iter()
-        .take(200)
         .map(|(_, t)| t)
         .collect();
     let items = checkup::check(&container, &counts, &hits, web.as_ref());
@@ -2115,26 +2113,6 @@ async fn save_enrichment(
 }
 
 #[derive(Deserialize)]
-struct EventsQuery {
-    limit: Option<usize>,
-    /// Only hits where a tag whose name contains this ran.
-    tag: Option<String>,
-}
-
-async fn events(
-    State(a): State<Admin>,
-    headers: HeaderMap,
-    Query(q): Query<EventsQuery>,
-) -> Response {
-    if let Err(r) = authorize(&a, &headers).await {
-        return *r;
-    }
-    let limit = q.limit.unwrap_or(50).min(CAPACITY);
-    let tag = q.tag.as_deref().filter(|t| !t.is_empty());
-    ok(json!({ "events": a.log.recent(limit, tag), "capacity": CAPACITY }))
-}
-
-#[derive(Deserialize)]
 struct SendTestBody {
     #[serde(default = "purchase")]
     event: String,
@@ -2213,7 +2191,7 @@ async fn send_test(
         body.event,
         summarize(&result)
     );
-    let entry = a.log.record("admin test", &result, started.elapsed(), true);
+    let entry = crate::eventlog::summary("admin test", &result, started.elapsed(), true);
     ok(json!({ "entry": entry }))
 }
 
@@ -2292,7 +2270,6 @@ mod tests {
         );
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -2440,7 +2417,6 @@ mod tests {
         ran(vec![json!({ "event_name": "purchase", "value": 7 })]);
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -2632,7 +2608,6 @@ mod tests {
         );
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -2766,7 +2741,6 @@ mod tests {
         let state = Arc::new(crate::state::State::memory());
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -2849,7 +2823,6 @@ mod tests {
         let history = Arc::new(crate::history::History::new(state.clone()));
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -2927,7 +2900,6 @@ mod tests {
         let state = Arc::new(crate::state::State::memory());
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),
@@ -3041,7 +3013,6 @@ mod tests {
         let f = ContainerFile::fixed(Container::builtin(), Default::default(), Default::default());
         let admin = Admin {
             pool: crate::server::Pool::for_tests(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: TOKEN.into(),

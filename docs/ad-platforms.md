@@ -100,6 +100,6 @@ Sends conversions to the X Ads API with the `x_capi` template. Requests are sign
 
 ## Checking the cards
 
-On `/admin`, each card's "Send a test event" button sends one test event for a chosen event name: `purchase`, `page_view`, `view_item`, `add_to_cart`, `begin_checkout`, `generate_lead` or `sign_up`. The test event carries an email (`admin-test@example.com`) so LinkedIn and X can match it, and its test consent state grants both ad signals, so it passes the consent check. The card shows the outcome, and the event also appears in the recent events log. An event that is not in the card's event list is skipped with `unmapped_event`, so add it to the list first.
+On `/admin`, each card's "Send a test event" button sends one test event for a chosen event name: `purchase`, `page_view`, `view_item`, `add_to_cart`, `begin_checkout`, `generate_lead` or `sign_up`. The test event carries an email (`admin-test@example.com`) so LinkedIn and X can match it, and its test consent state grants both ad signals, so it passes the consent check. The card shows the outcome: how the tag ended and what the platform answered. An event that is not in the card's event list is skipped with `unmapped_event`, so add it to the list first.
 
-The test event checks the settings, the tokens and the path to the platform. It does not check that your site sends real hits with consent. For that, watch the recent events log while you use the site.
+The test event checks the settings, the tokens and the path to the platform. It does not check that your site sends real hits with consent. For that, watch **Live** in the console while you use the site.

@@ -700,6 +700,7 @@ impl Alerts {
             .collect();
         let (mut opened, mut resolved, mut explained) = (0, 0, 0);
         let found: BTreeSet<String> = findings.iter().map(Finding::id).collect();
+        let mut recent_changes: Option<Vec<Value>> = None;
 
         for f in &findings {
             let id = f.id();
@@ -734,10 +735,10 @@ impl Alerts {
                     }
                 }
                 None => {
-                    let related: Vec<Value> = self
-                        .history
-                        .since(now.saturating_sub(RELATED_MS))
-                        .into_iter()
+                    // Read once a check, however many alerts open in it.
+                    let related: Vec<Value> = recent_changes
+                        .get_or_insert_with(|| self.history.since(now.saturating_sub(RELATED_MS)))
+                        .iter()
                         .map(|e| {
                             let text: Vec<String> = e["edits"]
                                 .as_array()

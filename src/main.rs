@@ -350,7 +350,6 @@ async fn main() {
         ))
     });
     let pool = Arc::new(pool);
-    let log = Arc::new(eventlog::EventLog::default());
     let admin = admin_token.map(|token| admin::Admin {
         tenants: match &target {
             Target::Multi(t) => Some(t.clone()),
@@ -370,7 +369,6 @@ async fn main() {
         alerts: alerts.clone(),
         check_token,
         pool: pool.clone(),
-        log: log.clone(),
         drafts: match &target {
             Target::Single(f) => Some(f.clone()),
             Target::Integrated(i) => Some(i.base().clone()),
@@ -396,11 +394,6 @@ async fn main() {
             }
         });
     }
-    // Only the integrations page shows the event log.
-    let log = admin
-        .as_ref()
-        .filter(|a| a.integrations.is_some())
-        .map(|_| log);
     let app = App {
         pool,
         target: target.clone(),
@@ -408,7 +401,6 @@ async fn main() {
         debug_token: debug_token.clone(),
         proxy_secret: proxy_secret.clone(),
         counts: counts.clone(),
-        log,
     };
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

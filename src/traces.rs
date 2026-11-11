@@ -275,11 +275,25 @@ impl Traces {
     /// Every hit's id and full record, newest first. `tenant` keeps one
     /// tenant's hits only.
     pub fn details(&self, tenant: Option<&str>) -> Vec<(u64, Value)> {
+        self.details_where(tenant, usize::MAX, |_| true)
+    }
+
+    /// The same, but only the hits `keep` wants and `limit` of them at
+    /// most. Hits wait on this lock to be recorded, so what the caller
+    /// would drop anyway is not copied while it is held.
+    pub fn details_where(
+        &self,
+        tenant: Option<&str>,
+        limit: usize,
+        keep: impl Fn(&Map<String, Value>) -> bool,
+    ) -> Vec<(u64, Value)> {
         let ring = self.ring.lock().expect("traces");
         ring.items
             .iter()
             .rev()
             .filter(|t| tenant.is_none() || t.tenant.as_deref() == tenant)
+            .filter(|t| keep(&t.detail))
+            .take(limit)
             .map(|t| (t.id, Value::Object(t.detail.clone())))
             .collect()
     }

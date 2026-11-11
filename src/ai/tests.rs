@@ -530,7 +530,6 @@ async fn the_console_routes_explain_and_audit() {
     let token = "t".repeat(32);
     let admin = Admin {
         pool: crate::server::Pool::for_tests(),
-        log: Default::default(),
         tenants: None,
         integrations: None,
         token: token.clone(),
@@ -733,7 +732,6 @@ async fn the_console_route_writes_and_previews_a_rule() {
     let token = "t".repeat(32);
     let admin = Admin {
         pool: crate::server::Pool::for_tests(),
-        log: Default::default(),
         tenants: None,
         integrations: None,
         token: token.clone(),
