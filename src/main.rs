@@ -234,8 +234,11 @@ async fn main() {
     // A dry preview of a draft sends nothing to the platforms; Google's own
     // scripts are still fetched, or the previewing browser would get none.
     let dry: Arc<dyn sandbox::Transport> = Arc::new(replay::DryPreview::new(transport.clone()));
+    // Only a draft's preview runs dry. Several sites have no drafts, and
+    // there the id is a site's own, which may be anything.
+    let previews = !matches!(target, Target::Multi(_));
     let pool = Pool::new(workers, workers * 128, move |t: &Resolved| {
-        let transport: Arc<dyn sandbox::Transport> = if t.id == "preview-dry" {
+        let transport: Arc<dyn sandbox::Transport> = if previews && t.id == "preview-dry" {
             dry.clone()
         } else {
             transport.clone()
