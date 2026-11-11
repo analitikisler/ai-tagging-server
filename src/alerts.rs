@@ -61,20 +61,167 @@ impl Default for Config {
     }
 }
 
+/// What an alert is about. The wording, the diagnosis and the rule for
+/// when an alert is over each match on this in full, so a kind added here
+/// can't go without one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    EventStopped,
+    EventDrop,
+    VendorFailing,
+    TagFailing,
+    MissingValue,
+    Unclaimed,
+    NameChanged,
+}
+
+impl Kind {
+    /// Whether a check says "judged" for this kind: there was enough traffic
+    /// to tell, and the condition wasn't found. A renamed event has no such
+    /// measure, so its alert is over as soon as it isn't found.
+    fn judged_by_volume(self) -> bool {
+        match self {
+            Kind::EventStopped
+            | Kind::EventDrop
+            | Kind::VendorFailing
+            | Kind::TagFailing
+            | Kind::MissingValue
+            | Kind::Unclaimed => true,
+            Kind::NameChanged => false,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::EventStopped => "event_stopped",
+            Kind::EventDrop => "event_drop",
+            Kind::VendorFailing => "vendor_failing",
+            Kind::TagFailing => "tag_failing",
+            Kind::MissingValue => "missing_value",
+            Kind::Unclaimed => "unclaimed",
+            Kind::NameChanged => "name_changed",
+        }
+    }
+}
+
+/// How bad a finding is. A problem is worse than a warning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Warning,
+    Problem,
+}
+
+impl Severity {
+    #[cfg(test)]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Warning => "warning",
+            Severity::Problem => "problem",
+        }
+    }
+}
+
 /// A problem one check found.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Finding {
-    pub kind: &'static str,
+    pub kind: Kind,
     pub site: String,
     pub subject: String,
-    /// "problem" or "warning".
-    pub severity: &'static str,
+    pub severity: Severity,
     pub numbers: Value,
+}
+
+/// An alert as it is kept between checks and shown in the console.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Alert {
+    pub id: String,
+    pub kind: Kind,
+    pub site: String,
+    pub subject: String,
+    pub severity: Severity,
+    pub numbers: Value,
+    /// Title and text, in English and Turkish.
+    pub texts: Value,
+    pub started_at: u64,
+    /// When a check last found it.
+    pub updated_at: u64,
+    pub notified_at: u64,
+    /// What Slack was last told. Alerts kept by an older version have none:
+    /// then it is the severity they were opened with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notified_severity: Option<Severity>,
+    /// Setup changes made shortly before it started.
+    #[serde(default)]
+    pub related: Vec<Value>,
+    /// The AI's likely cause, when the AI is on.
+    #[serde(default)]
+    pub diagnosis: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at: Option<u64>,
+}
+
+/// What is kept between checks.
+#[derive(Default)]
+struct Kept {
+    open: BTreeMap<String, Alert>,
+    recent: Vec<Alert>,
+    last_check: Value,
+    /// Messages Slack didn't take, for the next check.
+    unsent: Vec<String>,
+}
+
+impl Kept {
+    /// Reads the kept state. An alert this version can't read (a kind it
+    /// doesn't know) is left out rather than costing all the others.
+    fn read(state: &State) -> Self {
+        let Some(v) = state.read("alerts/state.json") else {
+            return Kept::default();
+        };
+        let alert = |v: &Value| serde_json::from_value::<Alert>(v.clone()).ok();
+        Kept {
+            open: v["open"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(id, a)| Some((id.clone(), alert(a)?)))
+                .collect(),
+            recent: v["recent"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(alert)
+                .collect(),
+            last_check: v["last_check"].clone(),
+            unsent: v["unsent"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p.as_str().map(str::to_string))
+                .collect(),
+        }
+    }
+
+    fn write(&self, state: &State) -> Result<(), String> {
+        state.write(
+            "alerts/state.json",
+            &json!({
+                "open": self.open, "recent": self.recent,
+                "last_check": self.last_check, "unsent": self.unsent,
+            }),
+        )
+    }
+}
+
+/// The name an alert is kept under: one per kind, site and subject.
+fn alert_id(kind: Kind, site: &str, subject: &str) -> String {
+    format!("{}|{site}|{subject}", kind.as_str())
 }
 
 impl Finding {
     pub fn id(&self) -> String {
-        format!("{}|{}|{}", self.kind, self.site, self.subject)
+        alert_id(self.kind, &self.site, &self.subject)
     }
 }
 
@@ -125,7 +272,7 @@ fn judge(
 ) -> (Vec<Finding>, BTreeSet<String>) {
     let mut out = Vec::new();
     let mut judged = BTreeSet::new();
-    let id = |kind: &str, subject: &str| format!("{kind}|{site}|{subject}");
+    let id = |kind: Kind, subject: &str| alert_id(kind, site, subject);
     let learning = base.len() < LEARNING_DAYS;
     let f = |kind, subject: String, severity, numbers| Finding {
         kind,
@@ -144,20 +291,24 @@ fn judge(
             if u < 10.0 {
                 continue;
             }
-            judged.insert(id("event_stopped", e));
-            judged.insert(id("event_drop", e));
+            judged.insert(id(Kind::EventStopped, e));
+            judged.insert(id(Kind::EventDrop, e));
             if n == 0.0 {
                 out.push(f(
-                    "event_stopped",
+                    Kind::EventStopped,
                     e.clone(),
-                    "problem",
+                    Severity::Problem,
                     json!({ "now": 0, "usual": round(u) }),
                 ));
             } else if n <= 0.3 * u || (u >= 20.0 && n <= 0.5 * u) {
-                let severity = if n <= 0.3 * u { "problem" } else { "warning" };
+                let severity = if n <= 0.3 * u {
+                    Severity::Problem
+                } else {
+                    Severity::Warning
+                };
                 let drop = round((1.0 - n / u) * 100.0);
                 out.push(f(
-                    "event_drop",
+                    Kind::EventDrop,
                     e.clone(),
                     severity,
                     json!({ "now": n, "usual": round(u), "drop_pct": drop }),
@@ -180,7 +331,7 @@ fn judge(
         if s.sends < 20 {
             continue;
         }
-        judged.insert(id("vendor_failing", host));
+        judged.insert(id(Kind::VendorFailing, host));
         let rate = ratio(s.failed, s.sends);
         let u = pooled(&|c| c.hosts.get(host).map_or((0, 0), |h| (h.failed, h.sends)));
         if raised(rate, u, 0.02) {
@@ -189,9 +340,13 @@ fn judge(
                 .iter()
                 .max_by_key(|(_, n)| **n)
                 .map(|(e, _)| e.clone());
-            let severity = if rate >= 0.5 { "problem" } else { "warning" };
+            let severity = if rate >= 0.5 {
+                Severity::Problem
+            } else {
+                Severity::Warning
+            };
             out.push(f(
-                "vendor_failing",
+                Kind::VendorFailing,
                 host.clone(),
                 severity,
                 json!({
@@ -209,7 +364,7 @@ fn judge(
         if tried < 20 {
             continue;
         }
-        judged.insert(id("tag_failing", tag));
+        judged.insert(id(Kind::TagFailing, tag));
         let rate = ratio(r.failed, tried);
         let u = pooled(&|c| {
             c.tags
@@ -217,8 +372,12 @@ fn judge(
                 .map_or((0, 0), |t| (t.failed, t.runs.saturating_sub(t.skipped)))
         });
         if raised(rate, u, 0.02) {
-            let severity = if rate >= 0.5 { "problem" } else { "warning" };
-            out.push(f("tag_failing", tag.clone(), severity, json!({
+            let severity = if rate >= 0.5 {
+                Severity::Problem
+            } else {
+                Severity::Warning
+            };
+            out.push(f(Kind::TagFailing, tag.clone(), severity, json!({
                 "failed": r.failed, "runs": tried, "rate_pct": round(rate * 100.0), "usual_pct": round(u * 100.0),
             })));
         }
@@ -250,11 +409,11 @@ fn judge(
                     .copied()
                     .unwrap_or(0)
             };
-            judged.insert(id("missing_value", &format!("{e}.{k}")));
+            judged.insert(id(Kind::MissingValue, &format!("{e}.{k}")));
             let rate = ratio(miss(now), n);
             let u = pooled(&|c| (miss(c), c.events.get(e).copied().unwrap_or(0)));
             if raised(rate, u, 0.05) {
-                out.push(f("missing_value", format!("{e}.{k}"), "warning", json!({
+                out.push(f(Kind::MissingValue, format!("{e}.{k}"), Severity::Warning, json!({
                     "missing": miss(now), "events": n, "rate_pct": round(rate * 100.0), "usual_pct": round(u * 100.0),
                 })));
             }
@@ -262,12 +421,16 @@ fn judge(
     }
 
     if now.hits >= 20 {
-        judged.insert(id("unclaimed", ""));
+        judged.insert(id(Kind::Unclaimed, ""));
         let rate = ratio(now.unclaimed, now.hits);
         let u = pooled(&|c| (c.unclaimed, c.hits));
         if raised(rate, u, 0.05) {
-            let severity = if rate >= 0.5 { "problem" } else { "warning" };
-            out.push(f("unclaimed", String::new(), severity, json!({
+            let severity = if rate >= 0.5 {
+                Severity::Problem
+            } else {
+                Severity::Warning
+            };
+            out.push(f(Kind::Unclaimed, String::new(), severity, json!({
                 "unclaimed": now.unclaimed, "hits": now.hits, "rate_pct": round(rate * 100.0), "usual_pct": round(u * 100.0),
             })));
         }
@@ -287,7 +450,7 @@ fn judge(
                     && simplified(old) == simplified(new)
                     && still <= 0.5 * u
                 {
-                    out.push(f("name_changed", format!("{old}→{new}"), "warning", json!({
+                    out.push(f(Kind::NameChanged, format!("{old}→{new}"), Severity::Warning, json!({
                         "old": old, "new": new, "old_now": still, "old_usual": round(u), "new_now": n,
                     })));
                 }
@@ -298,7 +461,7 @@ fn judge(
 }
 
 /// An alert's title and text, in English or Turkish.
-pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, String) {
+pub fn words(kind: Kind, subject: &str, n: &Value, lang: &str) -> (String, String) {
     let num = |k: &str| {
         let v = n[k].as_f64().unwrap_or(0.0);
         if v.fract() == 0.0 {
@@ -309,21 +472,21 @@ pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, Strin
     };
     let tr = lang == "tr";
     match kind {
-        "event_stopped" if tr => (
+        Kind::EventStopped if tr => (
             format!("{subject} durdu"),
             format!(
                 "Son bir saatte hiç {subject} yok; bu saatte genellikle {} civarında.",
                 num("usual")
             ),
         ),
-        "event_stopped" => (
+        Kind::EventStopped => (
             format!("{subject} stopped"),
             format!(
                 "No {subject} in the last hour; usually about {} at this time.",
                 num("usual")
             ),
         ),
-        "event_drop" if tr => (
+        Kind::EventDrop if tr => (
             format!("{subject} %{} düştü", num("drop_pct")),
             format!(
                 "Son bir saatte {} {subject}; bu saatte genellikle {} civarında.",
@@ -331,7 +494,7 @@ pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, Strin
                 num("usual")
             ),
         ),
-        "event_drop" => (
+        Kind::EventDrop => (
             format!("{subject} down {}%", num("drop_pct")),
             format!(
                 "{} {subject} in the last hour; usually about {} at this time.",
@@ -339,7 +502,7 @@ pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, Strin
                 num("usual")
             ),
         ),
-        "vendor_failing" => {
+        Kind::VendorFailing => {
             let err = n["top_error"]
                 .as_str()
                 .map(|e| format!(" ({e})"))
@@ -368,7 +531,7 @@ pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, Strin
                 )
             }
         }
-        "tag_failing" if tr => (
+        Kind::TagFailing if tr => (
             format!("\"{subject}\" tag'i başarısız oluyor"),
             format!(
                 "Son bir saatte {} çalışmadan {} tanesi başarısız, hata verdi veya zaman aşımına uğradı (%{}; genellikle %{}).",
@@ -378,7 +541,7 @@ pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, Strin
                 num("usual_pct")
             ),
         ),
-        "tag_failing" => (
+        Kind::TagFailing => (
             format!("Tag \"{subject}\" is failing"),
             format!(
                 "{} of {} runs failed, threw or timed out in the last hour ({}%; usually {}%).",
@@ -388,7 +551,7 @@ pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, Strin
                 num("usual_pct")
             ),
         ),
-        "missing_value" => {
+        Kind::MissingValue => {
             // The key is the last part: an event name can hold dots itself.
             let (event, key) = subject.rsplit_once('.').unwrap_or((subject, ""));
             if tr {
@@ -415,7 +578,7 @@ pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, Strin
                 )
             }
         }
-        "unclaimed" if tr => (
+        Kind::Unclaimed if tr => (
             "Sahipsiz hit'ler arttı".into(),
             format!(
                 "Son bir saatte {} hit'ten {} tanesini hiçbir client almadı (%{}; genellikle %{}). Sık nedeni: sitede değişen bir measurement id.",
@@ -425,7 +588,7 @@ pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, Strin
                 num("usual_pct")
             ),
         ),
-        "unclaimed" => (
+        Kind::Unclaimed => (
             "Unclaimed hits are up".into(),
             format!(
                 "No client claimed {} of {} hits in the last hour ({}%; usually {}%). A common cause is a changed measurement id on the site.",
@@ -435,7 +598,7 @@ pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, Strin
                 num("usual_pct")
             ),
         ),
-        "name_changed" => {
+        Kind::NameChanged => {
             let (old, new) = (
                 n["old"].as_str().unwrap_or(""),
                 n["new"].as_str().unwrap_or(""),
@@ -462,16 +625,23 @@ pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, Strin
                 )
             }
         }
-        _ => (subject.to_string(), String::new()),
     }
 }
 
-/// What a check needs from the console besides counts: the containers by
-/// site, for the AI, and a way to explain an alert.
+/// Why an alert is posted to Slack.
+#[derive(Clone, Copy, PartialEq)]
+enum Post {
+    Open,
+    Worse,
+    Resolved,
+}
+
+/// What a check needs from the console besides counts: a way to explain a
+/// new alert.
 pub struct Context<'a> {
     pub explain: Option<
         &'a (
-                dyn Fn(Value) -> futures_util::future::BoxFuture<'static, Option<Value>>
+                dyn Fn(Alert) -> futures_util::future::BoxFuture<'static, Option<Value>>
                     + Send
                     + Sync
             ),
@@ -553,19 +723,13 @@ impl Alerts {
 
     /// Open and recent alerts and how the last check went.
     pub fn view(&self) -> Value {
-        let s = self
-            .state
-            .read("alerts/state.json")
-            .unwrap_or_else(|| json!({}));
-        let mut open: Vec<Value> = s["open"]
-            .as_object()
-            .map(|m| m.values().cloned().collect())
-            .unwrap_or_default();
-        open.sort_by_key(|a| std::cmp::Reverse(a["started_at"].as_u64().unwrap_or(0)));
+        let kept = Kept::read(&self.state);
+        let mut open: Vec<&Alert> = kept.open.values().collect();
+        open.sort_by_key(|a| std::cmp::Reverse(a.started_at));
         json!({
             "open": open,
-            "recent": s["recent"].as_array().cloned().unwrap_or_default(),
-            "last_check": s["last_check"],
+            "recent": kept.recent,
+            "last_check": kept.last_check,
             "config": self.config(),
             "slack": self.slack_on(),
             "shared": self.state.is_shared(),
@@ -682,22 +846,9 @@ impl Alerts {
         ctx: Context<'_>,
     ) -> Value {
         let now = now_ms();
-        let mut s = self
-            .state
-            .read("alerts/state.json")
-            .unwrap_or_else(|| json!({}));
-        let mut open: BTreeMap<String, Value> = s["open"]
-            .as_object()
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default();
-        let mut recent: Vec<Value> = s["recent"].as_array().cloned().unwrap_or_default();
+        let mut kept = Kept::read(&self.state);
         // Messages Slack didn't take last time go out first.
-        let mut posts: Vec<String> = s["unsent"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|p| p.as_str().map(str::to_string))
-            .collect();
+        let mut posts: Vec<String> = std::mem::take(&mut kept.unsent);
         let (mut opened, mut resolved, mut explained) = (0, 0, 0);
         let found: BTreeSet<String> = findings.iter().map(Finding::id).collect();
         let mut recent_changes: Option<Vec<Value>> = None;
@@ -709,29 +860,20 @@ impl Alerts {
                 words(f.kind, &f.subject, &f.numbers, "tr"),
             );
             let texts = json!({ "en": { "title": en.0, "text": en.1 }, "tr": { "title": tr.0, "text": tr.1 } });
-            match open.get_mut(&id) {
+            match kept.open.get_mut(&id) {
                 Some(a) => {
                     // Against what Slack was last told, so a warning that
                     // turns into a problem within the hour is still posted
                     // once the hour is up.
-                    let told = a["notified_severity"]
-                        .as_str()
-                        .or(a["severity"].as_str())
-                        .unwrap_or_default();
-                    let worse = told == "warning" && f.severity == "problem";
-                    if a["notified_severity"].is_null() {
-                        a["notified_severity"] = a["severity"].clone();
-                    }
-                    a["severity"] = json!(f.severity);
-                    a["numbers"] = f.numbers.clone();
-                    a["texts"] = texts;
-                    a["updated_at"] = json!(now);
-                    if worse
-                        && now.saturating_sub(a["notified_at"].as_u64().unwrap_or(0)) >= REPEAT_MS
-                    {
-                        a["notified_at"] = json!(now);
-                        a["notified_severity"] = json!(f.severity);
-                        posts.push(self.post_text(a, cfg, "worse"));
+                    let told = *a.notified_severity.get_or_insert(a.severity);
+                    a.severity = f.severity;
+                    a.numbers = f.numbers.clone();
+                    a.texts = texts;
+                    a.updated_at = now;
+                    if f.severity > told && now.saturating_sub(a.notified_at) >= REPEAT_MS {
+                        a.notified_at = now;
+                        a.notified_severity = Some(f.severity);
+                        posts.push(self.post_text(a, cfg, Post::Worse));
                     }
                 }
                 None => {
@@ -749,85 +891,92 @@ impl Alerts {
                             json!({ "at": e["at"], "source": e["source"], "text": text, "edits": e["edits"] })
                         })
                         .collect();
-                    let mut a = json!({
-                        "id": id, "kind": f.kind, "site": f.site, "subject": f.subject,
-                        "severity": f.severity, "numbers": f.numbers, "texts": texts,
-                        "started_at": now, "updated_at": now, "notified_at": now,
-                        "notified_severity": f.severity,
-                        "related": related, "diagnosis": null,
-                    });
+                    let mut a = Alert {
+                        id: id.clone(),
+                        kind: f.kind,
+                        site: f.site.clone(),
+                        subject: f.subject.clone(),
+                        severity: f.severity,
+                        numbers: f.numbers.clone(),
+                        texts,
+                        started_at: now,
+                        updated_at: now,
+                        notified_at: now,
+                        notified_severity: Some(f.severity),
+                        related,
+                        diagnosis: Value::Null,
+                        resolved_at: None,
+                    };
                     if let Some(explain) = ctx.explain.filter(|_| explained < 3) {
                         explained += 1;
-                        a["diagnosis"] = explain(a.clone()).await.unwrap_or(Value::Null);
+                        a.diagnosis = explain(a.clone()).await.unwrap_or(Value::Null);
                     }
-                    posts.push(self.post_text(&a, cfg, "open"));
+                    posts.push(self.post_text(&a, cfg, Post::Open));
                     opened += 1;
-                    open.insert(id, a);
+                    kept.open.insert(id, a);
                 }
             }
         }
         // An alert is over when its condition was judged and not found. One
         // that couldn't be judged (too little traffic this hour) stays open,
         // for a day at most since it was last seen.
-        let gone: Vec<String> = open
+        let gone: Vec<String> = kept
+            .open
             .iter()
             .filter(|(id, a)| {
                 !found.contains(*id)
                     && (judged.contains(*id)
-                        || a["kind"] == "name_changed"
-                        || now.saturating_sub(a["updated_at"].as_u64().unwrap_or(0)) >= QUIET_MS)
+                        || !a.kind.judged_by_volume()
+                        || now.saturating_sub(a.updated_at) >= QUIET_MS)
             })
             .map(|(id, _)| id.clone())
             .collect();
         for id in gone {
-            if let Some(mut a) = open.remove(&id) {
-                a["resolved_at"] = json!(now);
-                posts.push(self.post_text(&a, cfg, "resolved"));
-                recent.insert(0, a);
+            if let Some(mut a) = kept.open.remove(&id) {
+                a.resolved_at = Some(now);
+                posts.push(self.post_text(&a, cfg, Post::Resolved));
+                kept.recent.insert(0, a);
                 resolved += 1;
             }
         }
-        recent.truncate(KEEP_RESOLVED);
+        kept.recent.truncate(KEEP_RESOLVED);
 
         let (sent, slack_error, unsent) = self.post_all(posts, cfg).await;
-        s["unsent"] = json!(unsent);
+        kept.unsent = unsent;
         let learning: Vec<&String> = days
             .iter()
             .filter(|(_, n)| **n < LEARNING_DAYS)
             .map(|(s, _)| s)
             .collect();
         let last = json!({
-            "at": now, "opened": opened, "resolved": resolved, "open": open.len(),
+            "at": now, "opened": opened, "resolved": resolved, "open": kept.open.len(),
             "posted": sent, "slack_error": slack_error, "learning": learning, "days": days,
         });
-        s["open"] = json!(open);
-        s["recent"] = json!(recent);
-        s["last_check"] = last.clone();
-        if let Err(e) = self.state.write("alerts/state.json", &s) {
+        kept.last_check = last.clone();
+        if let Err(e) = kept.write(&self.state) {
             tracing::warn!("alerts: state not saved: {e}");
         }
         last
     }
 
     /// The Slack text for an alert that opened, got worse or resolved.
-    fn post_text(&self, a: &Value, cfg: &Config, what: &str) -> String {
+    fn post_text(&self, a: &Alert, cfg: &Config, what: Post) -> String {
         let lang = cfg.language.as_str();
-        let t = &a["texts"][lang];
+        let t = &a.texts[lang];
         let title = t["title"].as_str().unwrap_or_default();
-        let site = a["site"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .map(|s| format!(" · {s}"))
-            .unwrap_or_default();
+        let site = if a.site.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", a.site)
+        };
         let tr = lang == "tr";
-        if what == "resolved" {
+        if what == Post::Resolved {
             let head = if tr { "Çözüldü" } else { "Resolved" };
             return format!("✅ *{head}: {}*{}", slack_text(title), slack_text(&site));
         }
-        let icon = if a["severity"] == "problem" {
-            "🔴"
-        } else {
-            "🟠"
+        let icon = match a.severity {
+            Severity::Problem => "🔴",
+            Severity::Warning => "🟠",
         };
         let title = slack_text(title);
         let site = slack_text(&site);
@@ -835,10 +984,10 @@ impl Alerts {
             "{icon} *{title}*{site}\n{}",
             slack_text(t["text"].as_str().unwrap_or_default())
         );
-        if what == "worse" {
+        if what == Post::Worse {
             out.insert_str(0, if tr { "Kötüleşti: " } else { "Worse: " });
         }
-        for r in a["related"].as_array().into_iter().flatten().take(3) {
+        for r in a.related.iter().take(3) {
             let when = r["at"].as_u64().map(clock).unwrap_or_default();
             let text: Vec<&str> = r["text"]
                 .as_array()
@@ -856,7 +1005,7 @@ impl Alerts {
                 slack_text(&text.join("; "))
             ));
         }
-        let d = &a["diagnosis"];
+        let d = &a.diagnosis;
         if let Some(cause) = d["likely_cause"].as_str().filter(|c| !c.is_empty()) {
             let lead = if tr {
                 "Olası neden (AI)"

@@ -19,7 +19,9 @@ use serde_json::{Value, json};
 use sha2::Digest;
 
 use crate::ai::{Ai, AiError, audit, diagnose, explain, review, rules, setup, todo};
-use crate::alerts::{Alerts, Config as AlertConfig, Context as AlertContext};
+use crate::alerts::{
+    Alert, Alerts, Config as AlertConfig, Context as AlertContext, Kind as AlertKind,
+};
 use crate::checkup;
 use crate::container::{Condition, Container, Tag, compile_conditions};
 use crate::container_file::{Change, ContainerFile, EditError};
@@ -1024,10 +1026,10 @@ async fn discard_draft(State(a): State<Admin>, headers: HeaderMap) -> Response {
 /// Runs the alert checks, with the AI explaining new alerts when it is on.
 pub async fn run_alert_check(a: &Admin) -> Value {
     type Explain =
-        dyn Fn(Value) -> futures_util::future::BoxFuture<'static, Option<Value>> + Send + Sync;
+        dyn Fn(Alert) -> futures_util::future::BoxFuture<'static, Option<Value>> + Send + Sync;
     let explain: Option<Box<Explain>> = a.ai.clone().map(|ai| {
         let admin = a.clone();
-        Box::new(move |alert: Value| {
+        Box::new(move |alert: Alert| {
             let (ai, admin) = (ai.clone(), admin.clone());
             Box::pin(async move { explain_alert(&admin, &ai, &alert).await })
                 as futures_util::future::BoxFuture<'static, Option<Value>>
@@ -1040,37 +1042,44 @@ pub async fn run_alert_check(a: &Admin) -> Value {
         .await
 }
 
-/// The AI's diagnosis of a new alert, with a few recent hits that show it.
-async fn explain_alert(a: &Admin, ai: &Ai, alert: &Value) -> Option<Value> {
-    let site = alert["site"].as_str().filter(|s| !s.is_empty());
-    let subject = alert["subject"].as_str().unwrap_or_default();
-    // The event an alert is about. Its name can hold dots, so only a
-    // missing value's key and a rename's new name are cut off.
-    let event = match alert["kind"].as_str().unwrap_or_default() {
-        "missing_value" => subject.rsplit_once('.').map_or(subject, |(e, _)| e),
-        "name_changed" => subject.split('→').next().unwrap_or(subject),
-        _ => subject,
-    };
-    let shows = |t: &Value| -> bool {
-        let r = &t["result"];
-        let sends = r["sends"].as_array().into_iter().flatten();
-        match alert["kind"].as_str().unwrap_or_default() {
-            "vendor_failing" => sends
-                .filter(|s| s["url"].as_str().is_some_and(|u| u.contains(subject)))
-                .any(|s| s["result"]["Ok"].as_u64().is_none_or(|c| c >= 400)),
-            "tag_failing" => r["tags"]
+/// Whether a hit's run shows what an alert is about: a refused send to its
+/// vendor, a failed run of its tag, an unclaimed hit, or its event.
+fn shows_alert(alert: &Alert, r: &Value) -> bool {
+    let subject = alert.subject.as_str();
+    // An event's name can hold dots, so only a missing value's key and a
+    // rename's new name are cut off the subject.
+    let event = match alert.kind {
+        AlertKind::VendorFailing => {
+            return r["sends"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .any(|x| x["tag"] == subject && checkup::failed_run(x)),
-            "unclaimed" => r["claimed_by"].is_null(),
-            _ => r["events"].as_array().into_iter().flatten().any(|e| {
-                e["event_name"]
-                    .as_str()
-                    .is_some_and(|n| n.eq_ignore_ascii_case(event))
-            }),
+                .filter(|s| s["url"].as_str().is_some_and(|u| u.contains(subject)))
+                .any(|s| s["result"]["Ok"].as_u64().is_none_or(|c| c >= 400));
         }
+        AlertKind::TagFailing => {
+            return r["tags"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|x| x["tag"] == subject && checkup::failed_run(x));
+        }
+        AlertKind::Unclaimed => return r["claimed_by"].is_null(),
+        AlertKind::MissingValue => subject.rsplit_once('.').map_or(subject, |(e, _)| e),
+        AlertKind::NameChanged => subject.split('→').next().unwrap_or(subject),
+        AlertKind::EventStopped | AlertKind::EventDrop => subject,
     };
+    r["events"].as_array().into_iter().flatten().any(|e| {
+        e["event_name"]
+            .as_str()
+            .is_some_and(|n| n.eq_ignore_ascii_case(event))
+    })
+}
+
+/// The AI's diagnosis of a new alert, with a few recent hits that show it.
+async fn explain_alert(a: &Admin, ai: &Ai, alert: &Alert) -> Option<Value> {
+    let site = Some(alert.site.as_str()).filter(|s| !s.is_empty());
+    let shows = |t: &Value| shows_alert(alert, &t["result"]);
     let hits: Vec<Value> = a
         .traces
         .details(site)
@@ -1081,7 +1090,7 @@ async fn explain_alert(a: &Admin, ai: &Ai, alert: &Value) -> Option<Value> {
         .collect();
     let container = live_container_for(a, site).unwrap_or(Value::Null);
     let lang = a.alerts.config().language;
-    match diagnose::diagnose(ai, alert, &hits, &container, Some(&lang)).await {
+    match diagnose::diagnose(ai, &json!(alert), &hits, &container, Some(&lang)).await {
         Ok(v) => Some(v),
         Err(e) => {
             tracing::warn!("alerts: no diagnosis: {}", e.message());

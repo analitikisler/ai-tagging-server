@@ -21,7 +21,7 @@ fn counts(events: &[(&str, u64)]) -> Counts {
 
 fn kinds(f: &[Finding]) -> Vec<(&str, &str, &str)> {
     f.iter()
-        .map(|f| (f.kind, f.subject.as_str(), f.severity))
+        .map(|f| (f.kind.as_str(), f.subject.as_str(), f.severity.as_str()))
         .collect()
 }
 
@@ -98,7 +98,7 @@ fn failing_vendors_and_tags_are_found_even_while_learning() {
     assert!(k.contains(&("tag_failing", "Meta", "problem")), "{k:?}");
     assert!(!k.iter().any(|(_, s, _)| *s == "www.google-analytics.com"));
     assert!(f.iter().all(|f| f.site == "shop"));
-    let v = f.iter().find(|f| f.kind == "vendor_failing").unwrap();
+    let v = f.iter().find(|f| f.kind == Kind::VendorFailing).unwrap();
     assert!(
         words(v.kind, &v.subject, &v.numbers, "en")
             .1
@@ -151,7 +151,7 @@ fn missing_values_unclaimed_hits_and_renamed_events() {
         k.contains(&("name_changed", "purchase→Purchase", "warning")),
         "{k:?}"
     );
-    let n = f.iter().find(|f| f.kind == "name_changed").unwrap();
+    let n = f.iter().find(|f| f.kind == Kind::NameChanged).unwrap();
     assert_eq!(
         words(n.kind, &n.subject, &n.numbers, "en").0,
         "purchase now arrives as Purchase"
@@ -282,9 +282,9 @@ async fn the_ai_explains_new_alerts_and_another_check_waits_for_the_lock() {
         },
     );
     put(&state, q - 1, c);
-    let explain = |a: Value| -> futures_util::future::BoxFuture<'static, Option<Value>> {
+    let explain = |a: Alert| -> futures_util::future::BoxFuture<'static, Option<Value>> {
         Box::pin(
-            async move { Some(json!({ "likely_cause": format!("cause of {}", a["subject"]) })) },
+            async move { Some(json!({ "likely_cause": format!("cause of {:?}", a.subject) })) },
         )
     };
     alerts
@@ -426,6 +426,65 @@ async fn a_message_slack_didnt_take_goes_out_with_the_next_check() {
     // And only once.
     up.check(Context { explain: None }).await;
     assert_eq!(slack.0.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn kept_alerts_keep_their_words_and_survive_one_that_cant_be_read() {
+    let state = Arc::new(State::memory());
+    let alerts = Alerts::new(
+        state.clone(),
+        Arc::new(History::new(state.clone())),
+        None,
+        None,
+        None,
+    );
+    // As an earlier version kept them: no `notified_severity`, and one of a
+    // kind this version doesn't have.
+    let old = |kind: &str, severity: &str| {
+        json!({
+            "id": format!("{kind}||Meta"), "kind": kind, "site": "", "subject": "Meta",
+            "severity": severity, "numbers": {}, "texts": {},
+            "started_at": 5, "updated_at": 5, "notified_at": 5, "related": [], "diagnosis": null,
+        })
+    };
+    state
+        .write(
+            "alerts/state.json",
+            &json!({
+                "open": {
+                    "tag_failing||Meta": old("tag_failing", "warning"),
+                    "long_gone||Meta": old("long_gone", "problem"),
+                },
+                "recent": [old("event_drop", "problem")],
+                "last_check": { "at": 5 },
+            }),
+        )
+        .unwrap();
+    let v = alerts.view();
+    let open = v["open"].as_array().unwrap();
+    assert_eq!(open.len(), 1, "{v}");
+    // The console reads these words.
+    assert_eq!(open[0]["kind"], "tag_failing");
+    assert_eq!(open[0]["severity"], "warning");
+    assert_eq!(v["recent"][0]["kind"], "event_drop");
+    assert_eq!(v["last_check"]["at"], 5);
+    for kind in [
+        Kind::EventStopped,
+        Kind::EventDrop,
+        Kind::VendorFailing,
+        Kind::TagFailing,
+        Kind::MissingValue,
+        Kind::Unclaimed,
+        Kind::NameChanged,
+    ] {
+        assert_eq!(json!(kind), kind.as_str());
+        // Every kind has its own words in both languages.
+        for lang in ["en", "tr"] {
+            let (title, text) = words(kind, "purchase.value", &json!({}), lang);
+            assert!(!title.is_empty() && !text.is_empty(), "{kind:?} {lang}");
+        }
+    }
+    assert!(Severity::Problem > Severity::Warning);
 }
 
 #[test]
