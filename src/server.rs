@@ -617,6 +617,12 @@ async fn handle(
     let mut r = result.response;
     // Keeps the preview on for the browser's next pages, for 4 hours.
     if let Some((code, _)) = &preview {
+        // What a preview answers is the draft's, for this browser only: no
+        // cache between it and the server may keep it for other visitors.
+        r.headers
+            .retain(|(k, _)| !k.eq_ignore_ascii_case("cache-control"));
+        r.headers
+            .push(("cache-control".into(), "private, no-store".into()));
         r.headers.push((
             "set-cookie".into(),
             format!("{PREVIEW_COOKIE}={code}; Path=/; Max-Age=14400; SameSite=Lax"),

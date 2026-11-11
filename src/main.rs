@@ -231,8 +231,9 @@ async fn main() {
     );
     metrics::init();
 
-    // A dry preview of a draft sends nothing.
-    let dry: Arc<dyn sandbox::Transport> = Arc::new(replay::Dry);
+    // A dry preview of a draft sends nothing to the platforms; Google's own
+    // scripts are still fetched, or the previewing browser would get none.
+    let dry: Arc<dyn sandbox::Transport> = Arc::new(replay::DryPreview::new(transport.clone()));
     let pool = Pool::new(workers, workers * 128, move |t: &Resolved| {
         let transport: Arc<dyn sandbox::Transport> = if t.id == "preview-dry" {
             dry.clone()

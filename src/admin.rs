@@ -253,8 +253,8 @@ fn page(html: &'static str) -> Response {
 
 /// Checks the bearer token. A wrong guess holds one of a few permits while it
 /// waits to be answered, so guesses sent in parallel queue up too: about
-/// eight a second per instance. The right token still gets through, only
-/// later, so nobody can lock the admin out on purpose.
+/// eight a second per instance. The right token is answered at once and
+/// never waits behind them, so nobody can lock the admin out on purpose.
 async fn authorize(admin: &Admin, headers: &HeaderMap) -> Result<(), Box<Response>> {
     static CHECKS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
     let given = headers
@@ -263,10 +263,10 @@ async fn authorize(admin: &Admin, headers: &HeaderMap) -> Result<(), Box<Respons
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("")
         .trim();
-    let _permit = CHECKS.acquire().await.expect("never closed");
     if same(given, &admin.token) {
         return Ok(());
     }
+    let _permit = CHECKS.acquire().await.expect("never closed");
     tokio::time::sleep(Duration::from_millis(500)).await;
     Err(Box::new(error(
         StatusCode::UNAUTHORIZED,
@@ -333,10 +333,25 @@ fn ai_error(e: AiError) -> Response {
 }
 
 /// The console's view of the container a tenant's hits run on, or of the
-/// one container outside multi-site mode.
+/// one container outside multi-site mode: there, the draft when there is
+/// one, since that is what the console shows and edits.
 fn container_for(a: &Admin, tenant: Option<&str>) -> Result<Value, Box<Response>> {
+    container_view_for(a, tenant, true)
+}
+
+/// The same, but always the container that runs: what live hits, the setup
+/// check and alerts are judged against, whatever a draft holds.
+fn live_container_for(a: &Admin, tenant: Option<&str>) -> Result<Value, Box<Response>> {
+    container_view_for(a, tenant, false)
+}
+
+fn container_view_for(
+    a: &Admin,
+    tenant: Option<&str>,
+    with_draft: bool,
+) -> Result<Value, Box<Response>> {
     let Target::Multi(tenants) = &a.target else {
-        return Ok(current_view(a));
+        return Ok(view_of(a, with_draft));
     };
     let Some(id) = tenant.filter(|t| !t.is_empty()) else {
         return Err(Box::new(error(
@@ -366,7 +381,13 @@ async fn ai_explain(
     let Some(t) = a.traces.get(id) else {
         return error(StatusCode::NOT_FOUND, "no such trace, or no longer kept");
     };
-    let container = match container_for(&a, t["tenant"].as_str()) {
+    // A preview hit ran the draft; any other ran the live container.
+    let container = if t["tenant"] == "preview" {
+        container_for(&a, None)
+    } else {
+        live_container_for(&a, t["tenant"].as_str())
+    };
+    let container = match container {
         Ok(c) => c,
         Err(r) => return *r,
     };
@@ -452,7 +473,7 @@ async fn ai_audit(
         return error(StatusCode::NOT_FOUND, "the AI is off");
     };
     let tenant = q.tenant.as_deref().filter(|t| !t.is_empty());
-    let container = match container_for(&a, tenant) {
+    let container = match live_container_for(&a, tenant) {
         Ok(c) => c,
         Err(r) => return *r,
     };
@@ -517,22 +538,23 @@ async fn container(
     if let Err(r) = authorize(&a, &headers).await {
         return *r;
     }
-    if let Target::Multi(tenants) = &a.target {
-        let Some(id) = q.tenant.as_deref().filter(|t| !t.is_empty()) else {
-            return error(StatusCode::BAD_REQUEST, "name a tenant with ?tenant=");
-        };
-        tenants.reload_if_changed();
-        return match tenants.get(id) {
-            Some(r) => ok(container_view(&r.container, None, Some(MULTI_READ_ONLY))),
-            None => error(StatusCode::NOT_FOUND, "no such tenant"),
-        };
+    match container_for(&a, q.tenant.as_deref()) {
+        Ok(view) => ok(view),
+        Err(r) => *r,
     }
-    ok(current_view(&a))
 }
 
 const MULTI_READ_ONLY: &str =
     "Each site runs the built-in container, so tags can't be edited with TENANTS_FILE.";
 const BUILTIN_READ_ONLY: &str = "The server runs the built-in container. Start it with CONTAINER_FILE=<path to a container file> to edit tags here.";
+
+/// Why there is nothing to edit, publish or discard.
+fn read_only_reason(a: &Admin) -> &'static str {
+    match a.target {
+        Target::Multi(_) => MULTI_READ_ONLY,
+        _ => BUILTIN_READ_ONLY,
+    }
+}
 
 /// The container file edits go to, outside multi-site mode.
 fn editable(a: &Admin) -> Option<&Arc<ContainerFile>> {
@@ -791,7 +813,6 @@ fn parse_tag(body: &[u8]) -> Result<TagBody, Box<Response>> {
     Ok(b)
 }
 
-/// Runs an edit and answers with the container as it is afterwards.
 /// Where a change goes: the draft (the console's edits) or live (an undo,
 /// which rolls live back).
 #[derive(Clone, Copy, PartialEq)]
@@ -916,7 +937,7 @@ async fn publish(State(a): State<Admin>, headers: HeaderMap, body: Bytes) -> Res
         Err(r) => return *r,
     };
     let (Some(d), Some(file)) = (&a.drafts, editable(&a)) else {
-        return error(StatusCode::BAD_REQUEST, BUILTIN_READ_ONLY);
+        return error(StatusCode::BAD_REQUEST, read_only_reason(&a));
     };
     let name = b.name.trim().chars().take(100).collect::<String>();
     let note = b.note.trim().chars().take(1000).collect::<String>();
@@ -952,7 +973,7 @@ async fn discard_draft(State(a): State<Admin>, headers: HeaderMap) -> Response {
         return *r;
     }
     let Some(d) = &a.drafts else {
-        return error(StatusCode::BAD_REQUEST, BUILTIN_READ_ONLY);
+        return error(StatusCode::BAD_REQUEST, read_only_reason(&a));
     };
     d.discard();
     tracing::info!("admin: discarded the draft");
@@ -982,7 +1003,13 @@ pub async fn run_alert_check(a: &Admin) -> Value {
 async fn explain_alert(a: &Admin, ai: &Ai, alert: &Value) -> Option<Value> {
     let site = alert["site"].as_str().filter(|s| !s.is_empty());
     let subject = alert["subject"].as_str().unwrap_or_default();
-    let event = subject.split(['.', '→']).next().unwrap_or(subject);
+    // The event an alert is about. Its name can hold dots, so only a
+    // missing value's key and a rename's new name are cut off.
+    let event = match alert["kind"].as_str().unwrap_or_default() {
+        "missing_value" => subject.rsplit_once('.').map_or(subject, |(e, _)| e),
+        "name_changed" => subject.split('→').next().unwrap_or(subject),
+        _ => subject,
+    };
     let shows = |t: &Value| -> bool {
         let r = &t["result"];
         let sends = r["sends"].as_array().into_iter().flatten();
@@ -1011,7 +1038,7 @@ async fn explain_alert(a: &Admin, ai: &Ai, alert: &Value) -> Option<Value> {
         .take(3)
         .map(|(_, t)| traces::for_ai(t))
         .collect();
-    let container = container_for(a, site).unwrap_or(Value::Null);
+    let container = live_container_for(a, site).unwrap_or(Value::Null);
     let lang = a.alerts.config().language;
     match diagnose::diagnose(ai, alert, &hits, &container, Some(&lang)).await {
         Ok(v) => Some(v),
@@ -1166,7 +1193,10 @@ async fn pin(State(a): State<Admin>, headers: HeaderMap, body: Bytes) -> Respons
     };
     let at = t["at"].as_u64().unwrap_or(0);
     let id = format!("{}-{}", crate::state::now_ms(), b.trace);
-    let mut entry = replay::pinned_entry(&id, label, t["tenant"].as_str(), at, &t["request"]);
+    // A hit made while previewing is a test case like any other, not one
+    // for a site called "preview".
+    let tenant = t["tenant"].as_str().filter(|t| *t != "preview");
+    let mut entry = replay::pinned_entry(&id, label, tenant, at, &t["request"]);
     entry["events"] = json!(
         t["result"]["events"]
             .as_array()
@@ -1218,8 +1248,8 @@ async fn ai_checkup(
         Ok(b) => b,
         Err(r) => return *r,
     };
-    let container =
-        container_for(&a, q.tenant.as_deref().filter(|t| !t.is_empty())).unwrap_or(Value::Null);
+    let container = live_container_for(&a, q.tenant.as_deref().filter(|t| !t.is_empty()))
+        .unwrap_or(Value::Null);
     match todo::todo(ai, &b.items, &b.web, &container, q.lang.as_deref()).await {
         Ok(v) => ok(v),
         Err(e) => ai_error(e),
@@ -1249,13 +1279,19 @@ async fn live_start(State(a): State<Admin>, headers: HeaderMap, body: Bytes) -> 
             Err(r) => return *r,
         }
     };
+    if b.preview && a.drafts.as_ref().and_then(|d| d.get()).is_none() {
+        return error(StatusCode::BAD_REQUEST, "there is no draft to preview");
+    }
     let now = crate::state::now_ms();
-    let digest = sha2::Sha256::digest(format!("{now}-{}", a.state.instance).as_bytes());
-    let code: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
-    let _ = a.state.write(
+    // The code decides which browser runs the draft, so it is random, not
+    // made from the time.
+    let code = format!("{:08x}", crate::store::unique() as u32);
+    if let Err(e) = a.state.write(
         &format!("checkup/live-{code}.json"),
         &json!({ "code": code, "since": now, "preview": b.preview, "send": b.send }),
-    );
+    ) {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &e);
+    }
     ok(json!({ "code": code, "since": now, "preview": b.preview, "send": b.send }))
 }
 
@@ -1341,7 +1377,7 @@ async fn checkup_view(
         return *r;
     }
     let tenant = q.tenant.as_deref().filter(|t| !t.is_empty());
-    let container = match container_for(&a, tenant) {
+    let container = match live_container_for(&a, tenant) {
         Ok(c) => c,
         Err(r) => return *r,
     };
@@ -1507,16 +1543,20 @@ async fn ai_setup(
         }
         let rules: Vec<Value> =
             serde_json::from_value(rules.clone()).map_err(|e| format!("transformations: {e}"))?;
-        file.apply(
-            &revision,
-            Change::Setup {
-                tags,
-                transformations: rules,
-            },
-            true,
-        )
-        .map(|_| ())
-        .map_err(|e| match e {
+        let change = Change::Setup {
+            tags,
+            transformations: rules,
+        };
+        // Checked against what Apply saves into: the draft, which may hold
+        // secrets live doesn't have yet.
+        let checked = match &a.drafts {
+            Some(d) => {
+                let revision = d.get().map_or_else(|| revision.clone(), |d| d.revision);
+                d.edit(&revision, change, true)
+            }
+            None => file.apply(&revision, change, true),
+        };
+        checked.map(|_| ()).map_err(|e| match e {
             EditError::Invalid(m) | EditError::Io(m) => m,
             EditError::Conflict(_) => "the container changed meanwhile; ask again".into(),
             EditError::NotFound => "a tag it names doesn't exist".into(),
@@ -1834,8 +1874,6 @@ async fn test_tag(
 /// passwords, credentials, auth values, header values and keys (`api_key`,
 /// `apiKey`). Ids (`pixel_id`, `allowedMeasurementIds`) and a bare `key`
 /// (the enrichment's lookup field) are not secrets.
-/// Whether a setting's name says it holds a secret (`*token*`, `*secret*`,
-/// `*key`…). Ids never count.
 pub(crate) fn secret_name(name: &str) -> bool {
     let n: String = name
         .chars()

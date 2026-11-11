@@ -358,7 +358,8 @@ pub fn words(kind: &str, subject: &str, n: &Value, lang: &str) -> (String, Strin
             ),
         ),
         "missing_value" => {
-            let (event, key) = subject.split_once('.').unwrap_or((subject, ""));
+            // The key is the last part: an event name can hold dots itself.
+            let (event, key) = subject.rsplit_once('.').unwrap_or((subject, ""));
             if tr {
                 (
                     format!("{event} event'lerinde {key} eksik"),
@@ -454,6 +455,9 @@ pub struct Alerts {
     /// The console's address, for links in Slack.
     admin_url: Option<String>,
     http: reqwest::Client,
+    /// Held while a check runs here: the lock in the state folder only keeps
+    /// other instances out.
+    running: tokio::sync::Mutex<()>,
 }
 
 impl Alerts {
@@ -474,6 +478,7 @@ impl Alerts {
                 .timeout(Duration::from_secs(10))
                 .build()
                 .expect("http client"),
+            running: Default::default(),
         }
     }
 
@@ -598,6 +603,11 @@ impl Alerts {
 
     /// Runs the checks, opens and resolves alerts, and posts to Slack.
     pub async fn check(&self, ctx: Context<'_>) -> Value {
+        // The timer and a "Check now" on the same instance wait for neither:
+        // the second is skipped, like a check another instance is running.
+        let Ok(_running) = self.running.try_lock() else {
+            return json!({ "skipped": "another check is running" });
+        };
         if !self.lock() {
             return json!({ "skipped": "another check is running" });
         }
@@ -614,7 +624,14 @@ impl Alerts {
                 .await
                 .unwrap_or_default();
         let result = self.reconcile(findings, &days, &cfg, ctx).await;
-        self.state.remove("alerts/lock.json");
+        // Only our own lock: a slow check's may have run out and been taken.
+        if self
+            .state
+            .read("alerts/lock.json")
+            .is_some_and(|l| l["instance"].as_str() == Some(self.state.instance.as_str()))
+        {
+            self.state.remove("alerts/lock.json");
+        }
         result
     }
 
@@ -738,16 +755,18 @@ impl Alerts {
         let tr = lang == "tr";
         if what == "resolved" {
             let head = if tr { "Çözüldü" } else { "Resolved" };
-            return format!("✅ *{head}: {title}*{site}");
+            return format!("✅ *{head}: {}*{}", slack_text(title), slack_text(&site));
         }
         let icon = if a["severity"] == "problem" {
             "🔴"
         } else {
             "🟠"
         };
+        let title = slack_text(title);
+        let site = slack_text(&site);
         let mut out = format!(
             "{icon} *{title}*{site}\n{}",
-            t["text"].as_str().unwrap_or_default()
+            slack_text(t["text"].as_str().unwrap_or_default())
         );
         if what == "worse" {
             out.insert_str(0, if tr { "Kötüleşti: " } else { "Worse: " });
@@ -765,7 +784,10 @@ impl Alerts {
             } else {
                 "Possibly related"
             };
-            out.push_str(&format!("\n{lead} ({when} UTC): {}", text.join("; ")));
+            out.push_str(&format!(
+                "\n{lead} ({when} UTC): {}",
+                slack_text(&text.join("; "))
+            ));
         }
         let d = &a["diagnosis"];
         if let Some(cause) = d["likely_cause"].as_str().filter(|c| !c.is_empty()) {
@@ -774,14 +796,14 @@ impl Alerts {
             } else {
                 "Likely cause (AI)"
             };
-            out.push_str(&format!("\n_{lead}:_ {cause}"));
+            out.push_str(&format!("\n_{lead}:_ {}", slack_text(cause)));
             if let Some(first) = d["check_first"].as_str().filter(|c| !c.is_empty()) {
                 let lead = if tr {
                     "Önce kontrol edin"
                 } else {
                     "Check first"
                 };
-                out.push_str(&format!("\n_{lead}:_ {first}"));
+                out.push_str(&format!("\n_{lead}:_ {}", slack_text(first)));
             }
         }
         if let Some(url) = &self.admin_url {
@@ -849,6 +871,14 @@ impl Alerts {
 }
 
 /// HH:MM in UTC.
+/// Text as Slack shows it literally: a vendor's error page or an event name
+/// can't make a link or a mention (`<!channel>`).
+fn slack_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 fn clock(ms: u64) -> String {
     let s = ms / 1000 % 86_400;
     format!("{:02}:{:02}", s / 3600, s / 60 % 60)
