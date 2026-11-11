@@ -82,7 +82,7 @@ fetchExtra((x) => {
           ttclid: queryParam('ttclid'),
           external_id: hash(x.external_id || getEventData('user_id')),
           email: hash(x.email),
-          phone_number: hashPhone(x.phone),
+          phone: hashPhoneE164(x.phone),
         }),
         page: clean({ url: pageUrl, referrer: getEventData('page_referrer') }),
         properties: Object.keys(properties).length ? properties : undefined,

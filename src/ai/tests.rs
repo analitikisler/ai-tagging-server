@@ -844,6 +844,16 @@ fn descriptions_with_secrets_are_refused() {
     assert!(!setup::looks_secret(
         "https://example.com/thanks for purchases"
     ));
+    // A secret right after a colon or an equals sign is still one.
+    assert!(setup::looks_secret(
+        "Meta token:EAAGm0PX4ZCpsBAJZBZC1234567890abcdef"
+    ));
+    assert!(setup::looks_secret(
+        "access_token=EAAGm0PX4ZCpsBAJZBZC1234567890abcdef"
+    ));
+    assert!(!setup::looks_secret(
+        "purchases at https://shop.example.com/thanks?step=done, value: order total"
+    ));
 }
 
 #[test]

@@ -195,7 +195,7 @@ fetchExtra((x) => {
   if (twclid) identifiers.push({ twclid: twclid });
   const email = hash(x.email);
   if (email) identifiers.push({ hashed_email: email });
-  const phone = hashPhone(x.phone);
+  const phone = hashPhoneE164(x.phone);
   if (phone) identifiers.push({ hashed_phone_number: phone });
   if (!identifiers.length) {
     skip('no_user_id');

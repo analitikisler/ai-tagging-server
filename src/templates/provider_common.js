@@ -35,6 +35,14 @@ const hashPhone = (v) => {
   const digits = s.replace(/[^0-9]/g, '');
   return digits ? sha256Sync(digits, { outputEncoding: 'hex' }) : undefined;
 };
+// TikTok and X match on the E.164 number, with its plus: "+491701234567".
+const hashPhoneE164 = (v) => {
+  if (v === undefined || v === null || v === '') return undefined;
+  const s = makeString(v).trim();
+  if (isHash(s.toLowerCase())) return s.toLowerCase();
+  const digits = s.replace(/[^0-9]/g, '').replace(/^00/, '');
+  return digits ? sha256Sync('+' + digits, { outputEncoding: 'hex' }) : undefined;
+};
 const clean = (obj) => {
   const out = {};
   Object.keys(obj).forEach((k) => {

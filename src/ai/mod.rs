@@ -35,6 +35,7 @@ const FALLBACK_MODELS: &[&str] = &[
     "claude-opus-5-5",
     "claude-opus-5",
     "claude-sonnet-5-5",
+    "claude-fable-5-2",
     "claude-fable-5-1",
 ];
 const MAX_TOKENS: u32 = 16_000;
@@ -47,9 +48,10 @@ const CACHE_SIZE: usize = 100;
 const PRICES: &[(&str, f64, f64, f64)] = &[
     ("claude-opus-5-5", 4.0, 20.0, 0.20),
     ("claude-opus-5", 5.0, 25.0, 0.50),
-    ("claude-sonnet-5-5", 2.0, 10.0, 0.20),
+    ("claude-sonnet-5-5", 2.0, 10.0, 0.10),
     ("claude-sonnet-5", 2.0, 10.0, 0.20),
     ("claude-haiku-5-5", 0.10, 0.50, 0.01),
+    ("claude-fable-5-2", 8.0, 40.0, 0.20),
     ("claude-fable-5-1", 10.0, 50.0, 0.25),
 ];
 

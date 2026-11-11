@@ -448,6 +448,12 @@ async fn ai_transformation(
             &format!("describe the change in 1 to {MAX_REQUEST} characters"),
         );
     }
+    if setup::looks_secret(request) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "this looks like it holds a token or key; leave secrets out of the request",
+        );
+    }
     let tenant = q.tenant.as_deref().filter(|t| !t.is_empty());
     let container = match container_for(&a, tenant) {
         Ok(c) => c,
@@ -598,11 +604,19 @@ fn view_of(a: &Admin, with_draft: bool) -> Value {
     file.reload_if_changed();
     let live = file.resolved().container;
     // With a draft, the console shows and edits the draft.
-    let draft = a
+    let stored = a
         .drafts
         .as_ref()
         .filter(|_| with_draft)
-        .and_then(|d| Some((d.get()?, d.container()?)));
+        .and_then(|d| d.get());
+    let draft = stored.and_then(|d| Some((d, a.drafts.as_ref()?.container()?)));
+    // A draft that no longer loads (a template file it names is gone, say)
+    // can only be discarded: the console shows live with a way to do that.
+    let broken = a
+        .drafts
+        .as_ref()
+        .filter(|_| with_draft && draft.is_none())
+        .and_then(|d| d.get());
     let (base, revision) = match &draft {
         Some((d, c)) => (c.clone(), Some(d.revision.clone())),
         None => (live.clone(), file.revision()),
@@ -627,7 +641,18 @@ fn view_of(a: &Admin, with_draft: bool) -> Value {
                 "edits": history::describe(&live, c),
             })
         }
-        None => Value::Null,
+        None => match &broken {
+            Some(d) => json!({
+                "revision": d.revision,
+                "base": d.base,
+                "live_revision": file.revision().unwrap_or_default(),
+                "stale": false,
+                "updated_at": d.updated_at,
+                "edits": [],
+                "broken": true,
+            }),
+            None => Value::Null,
+        },
     };
     // Platform tags come after the file's own, and are set up under Integrations.
     if let Some(tags) = view["tags"].as_array_mut() {

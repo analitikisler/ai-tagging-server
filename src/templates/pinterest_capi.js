@@ -62,7 +62,8 @@ fetchExtra((x) => {
         user_data: clean({
           client_ip_address: getEventData('ip_override'),
           client_user_agent: getEventData('user_agent'),
-          click_id: queryParam('epik'),
+          // From the landing page, or the cookie Pinterest's tag kept it in.
+          click_id: queryParam('epik') || getCookieValues('_epik')[0],
           external_id: listOf(hash(x.external_id || getEventData('user_id'))),
           em: listOf(hash(x.email)),
           ph: listOf(hashPhone(x.phone)),

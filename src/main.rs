@@ -97,6 +97,32 @@ async fn main() {
             }
         }
     }
+    // These set up the built-in container only. With a container file or
+    // tenants they would be ignored without a word.
+    let own_container = if tenants_file.is_some() {
+        Some("TENANTS_FILE: set it for each tenant")
+    } else if std::env::var("CONTAINER_FILE").is_ok_and(|v| !v.is_empty()) {
+        Some("CONTAINER_FILE: set it in the file, on the GA4 client or tag")
+    } else {
+        None
+    };
+    if let Some(instead) = own_container {
+        for var in [
+            "SCRIPT_IDS",
+            "MEASUREMENT_IDS",
+            "SITE_DOMAINS",
+            "ORIGIN_CHECK",
+            "STRIP_USER_DATA",
+            "KEEP_COOKIES",
+            "CLICK_ID_ALIASES",
+            "VISITOR_INFO",
+            "BOT_HANDLING",
+        ] {
+            if std::env::var(var).is_ok_and(|v| !v.is_empty()) {
+                tracing::warn!("{var} is ignored with {instead}");
+            }
+        }
+    }
     let integrations_file = std::env::var("INTEGRATIONS_FILE")
         .ok()
         .filter(|p| !p.is_empty());
@@ -186,7 +212,10 @@ async fn main() {
                         measurement_ids,
                         site_domains,
                         origin_check,
-                        strip_user_data: env("STRIP_USER_DATA", 0u8) == 1,
+                        strip_user_data: matches!(
+                            std::env::var("STRIP_USER_DATA").as_deref().map(str::trim),
+                            Ok("1" | "true")
+                        ),
                         features,
                     });
                     ContainerFile::fixed(container, storage.clone(), stats)

@@ -415,13 +415,17 @@ fn web_items(w: &Value, events: &[&Value]) -> Vec<Value> {
     let here = urls
         .iter()
         .any(|u| !public.is_empty() && u.trim_end_matches('/').to_lowercase().starts_with(&public));
+    // Nothing can be said about a container that wasn't found or read.
+    let unread = (gtm.is_empty() && !direct) || w["gtm_error"].is_string();
     if urls.is_empty() {
-        out.push(item(
-            "server_url_missing",
-            "bad",
-            "website",
-            json!({ "gtm": gtm, "public_url": public }),
-        ));
+        if !unread {
+            out.push(item(
+                "server_url_missing",
+                "bad",
+                "website",
+                json!({ "gtm": gtm, "public_url": public }),
+            ));
+        }
     } else if public.is_empty() || here {
         out.push(item(
             "server_url",

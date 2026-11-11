@@ -2055,7 +2055,7 @@ fn enrichment_adds_hashed_fields_from_the_sites_server() {
     assert_eq!(meta["external_id"][0], hex("cust-7"));
     let tt = &bodies(&rec, "https://business-api.tiktok.com")[0].1["data"][0]["user"];
     assert_eq!(tt["email"], hex("jane@example.com"));
-    assert_eq!(tt["phone_number"], hex("491701234567"));
+    assert_eq!(tt["phone"], hex("+491701234567"));
 }
 
 #[test]
@@ -2219,7 +2219,7 @@ fn hashed_user_data_passes_through_and_tiktok_gets_it_too() {
     assert_eq!(meta["ph"][0], ph);
     let tt = &bodies(&rec, "https://business-api.tiktok.com")[0].1["data"][0]["user"];
     assert_eq!(tt["email"], em);
-    assert_eq!(tt["phone_number"], ph);
+    assert_eq!(tt["phone"], ph);
 }
 
 #[test]

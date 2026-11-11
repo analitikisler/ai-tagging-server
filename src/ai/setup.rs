@@ -90,6 +90,12 @@ fn schema() -> Value {
 /// API key (sk-…), or any long run of letters and digits.
 pub fn looks_secret(text: &str) -> bool {
     text.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '"' | '\'' | '(' | ')'))
+        // `token:EAAG…` and `key=sk-…` hold the secret after the mark; an
+        // address is left whole.
+        .flat_map(|w| {
+            let whole = w.contains("://");
+            w.split(move |c: char| !whole && matches!(c, ':' | '='))
+        })
         .any(|w| {
             let w = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '/');
             let long = w.len() >= 32
@@ -175,7 +181,9 @@ pub async fn propose(
             .await?;
         let text = |k: &str| answer[k].as_str().unwrap_or_default().trim().to_string();
         let steps = answer["web_steps"].clone();
-        if text("tags_json").is_empty() && !text("question").is_empty() {
+        // No tags at all is an answer without a proposal, never a proposal
+        // to remove every tag.
+        if text("tags_json").is_empty() {
             return Ok(json!({
                 "explanation": text("explanation"), "question": text("question"),
                 "proposal": null, "needs": [], "web_steps": steps, "model": ai.model(),

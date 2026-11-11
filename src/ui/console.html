@@ -880,6 +880,7 @@ const STRINGS = {
     'dr.title1': 'Draft: 1 change not published',
     'chk.publish': 'Publish anyway',
     'dr.stale': 'The live container changed since this draft was started (another publish, or an edit to the file). Publishing it replaces that change.',
+    'dr.broken': 'The draft no longer loads, for example because a template file it names is gone, so it can’t be edited or published. What you see is the live container. Discard the draft to edit again.',
     'dr.preview': 'Preview',
     'dr.publish': 'Publish…',
     'dr.discard': 'Discard draft',
@@ -1767,6 +1768,7 @@ const STRINGS = {
     'dr.title1': 'Taslak: yayınlanmamış 1 değişiklik',
     'chk.publish': 'Yine de yayınla',
     'dr.stale': 'Bu taslak başladığından beri canlı container değişti (başka bir yayın ya da dosyada düzenleme). Yayınlarsanız o değişikliğin yerine geçer.',
+    'dr.broken': 'Taslak artık yüklenmiyor (örneğin kullandığı bir şablon dosyası kaldırılmış), bu yüzden düzenlenemez ve yayınlanamaz. Gördüğünüz canlı container. Yeniden düzenlemek için taslağı silin.',
     'dr.preview': 'Önizle',
     'dr.publish': 'Yayınla…',
     'dr.discard': 'Taslağı sil',
@@ -5247,16 +5249,19 @@ function draftBar(c, tenant) {
   const d = c.draft;
   if (!d) return h('p', { class: 'note', text: t('dr.none') });
   const refresh = () => { S.containers.delete(containerKey(tenant)); onRoute(); };
+  const discardNow = async () => {
+    if (!(await confirmDialog({ title: t('dr.discardTitle'), body: t('dr.discardBody'), confirm: t('dr.discard'), danger: true }))) return;
+    try { await api('DELETE', '/admin/api/container/draft'); toast('ok', t('dr.discarded')); refresh(); } catch (e) { toast('bad', e.raw || e.message); }
+  };
+  // A draft that no longer loads can't be edited or published, only dropped.
+  if (d.broken) return h('aside', { class: 'callout' }, boxedMessage('bad', t('dr.broken')), h('div', { class: 'cluster' }, tfButton(t('dr.discard'), 'secondary', discardNow, 'i-trash')));
   const n = (d.edits || []).length;
   const box = h('aside', { class: 'callout' }, h('p', { class: 'callout__title', text: n === 1 ? t('dr.title1') : t('dr.title', { n: n }) }));
   if ((d.edits || []).length) box.appendChild(h('ul', { class: 'stack gap-1' }, d.edits.map((e) => h('li', null, editSentence(e)))));
   if (d.stale) box.appendChild(boxedMessage('warn', t('dr.stale')));
   const preview = tfButton(t('dr.preview'), 'secondary', () => { CK.live = null; go(hashFor(['checkup'], scopeQuery())); }, 'i-play');
   const publish = tfButton(t('dr.publish'), 'primary', () => publishDialog(c, tenant, refresh), 'i-check');
-  const discard = tfButton(t('dr.discard'), 'ghost', async () => {
-    if (!(await confirmDialog({ title: t('dr.discardTitle'), body: t('dr.discardBody'), confirm: t('dr.discard'), danger: true }))) return;
-    try { await api('DELETE', '/admin/api/container/draft'); toast('ok', t('dr.discarded')); refresh(); } catch (e) { toast('bad', e.raw || e.message); }
-  }, 'i-trash');
+  const discard = tfButton(t('dr.discard'), 'ghost', discardNow, 'i-trash');
   box.appendChild(h('div', { class: 'cluster' }, publish, preview, discard));
   return box;
 }
