@@ -289,6 +289,18 @@ impl Container {
             transformations: file.transformations,
         };
         container.compile()?;
+        // The console never saves two tags under one name; a file written by
+        // hand can hold them, and rules and the debugger tell tags apart by
+        // name.
+        let mut seen = std::collections::HashSet::new();
+        for t in &container.tags {
+            if !seen.insert(t.name.as_str()) {
+                tracing::warn!(
+                    "two tags are called {:?}: transformations and the console treat them as one, so rename one",
+                    t.name
+                );
+            }
+        }
         for c in &container.clients {
             let ids = c
                 .data

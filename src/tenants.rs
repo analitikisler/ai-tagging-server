@@ -237,7 +237,7 @@ struct State {
 pub struct Tenants {
     path: PathBuf,
     state: RwLock<State>,
-    /// Storage and counters outlive edits of a tenant.
+    /// Storage and counters outlive edits of a tenant, and go when it is deleted.
     storage: Mutex<HashMap<String, Storage>>,
     stats: Mutex<HashMap<String, Arc<TenantStats>>>,
     generation: AtomicU64,
@@ -351,6 +351,16 @@ impl Tenants {
                 },
             );
         }
+        // A deleted tenant's storage and counters go with it, so a tenant
+        // that later takes its id starts clean.
+        self.storage
+            .lock()
+            .expect("storage")
+            .retain(|id, _| next.by_id.contains_key(id));
+        self.stats
+            .lock()
+            .expect("stats")
+            .retain(|id, _| next.by_id.contains_key(id));
         *state = next;
     }
 

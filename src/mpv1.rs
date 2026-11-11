@@ -31,9 +31,11 @@ fn params(req: &IncomingRequest) -> Vec<(String, String)> {
             .collect()
     };
     let body = parse(&req.body);
+    let overridden: std::collections::HashSet<&str> =
+        body.iter().map(|(k, _)| k.as_str()).collect();
     let mut out: Vec<(String, String)> = parse(&req.query)
         .into_iter()
-        .filter(|(k, _)| !body.iter().any(|(bk, _)| bk == k))
+        .filter(|(k, _)| !overridden.contains(k.as_str()))
         .collect();
     out.extend(body);
     out

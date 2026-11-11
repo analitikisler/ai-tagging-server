@@ -1,23 +1,16 @@
-//! The last hits this instance ran, for the admin page: which events arrived,
-//! how each tag ended (and why it skipped) and what each platform answered.
-//! Kept in memory only, so every instance has its own and a restart empties it.
+//! A run summed up for the admin page's test sends: which events it made, how
+//! each tag ended (and why it skipped) and what each platform answered,
+//! without the query or any visitor identifier.
 
-use std::collections::VecDeque;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::sandbox::{RunResult, TagRun};
 
-/// Hits kept; the oldest is dropped past this.
-pub const CAPACITY: usize = 200;
-
 #[derive(Debug, Clone, Serialize)]
 pub struct Entry {
-    pub id: u64,
     /// Milliseconds since the Unix epoch.
     pub at: u64,
     /// Sent from the admin page's test button rather than by a visitor.
@@ -58,86 +51,41 @@ pub struct SendSummary {
     pub response: Option<String>,
 }
 
-pub struct EventLog {
-    entries: Mutex<VecDeque<Entry>>,
-    next: AtomicU64,
-}
-
-impl Default for EventLog {
-    fn default() -> Self {
-        EventLog {
-            entries: Mutex::new(VecDeque::with_capacity(CAPACITY)),
-            next: AtomicU64::new(1),
-        }
+/// Sums up a run that produced events or went wrong; None for anything
+/// else (a script download, an unclaimed request).
+pub fn summary(path: &str, r: &RunResult, elapsed: Duration, test: bool) -> Option<Entry> {
+    let worth = !r.events.is_empty() || r.client_error.is_some() || r.response.status >= 500;
+    if !worth {
+        return None;
     }
-}
-
-impl EventLog {
-    /// Keeps a hit that produced events or went wrong. Script downloads and
-    /// unclaimed requests (bots, scanners) would only crowd the list.
-    pub fn record(
-        &self,
-        path: &str,
-        r: &RunResult,
-        elapsed: Duration,
-        test: bool,
-    ) -> Option<Entry> {
-        let worth = !r.events.is_empty() || r.client_error.is_some() || r.response.status >= 500;
-        if !worth {
-            return None;
-        }
-        let entry = Entry {
-            id: self.next.fetch_add(1, Relaxed),
-            at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0),
-            test,
-            path: path.to_string(),
-            status: r.response.status,
-            ms: elapsed.as_millis() as u64,
-            client: r.claimed_by.clone(),
-            client_error: r.client_error.clone(),
-            events: r.events.iter().map(summarize_event).collect(),
-            tags: r.tags.clone(),
-            sends: r
-                .sends
-                .iter()
-                .map(|s| SendSummary {
-                    from: s.from.clone(),
-                    method: s.method.clone(),
-                    url: s
-                        .url
-                        .split(['?', '#'])
-                        .next()
-                        .unwrap_or_default()
-                        .to_string(),
-                    result: s.result.clone().map_err(|e| without_queries(&e)),
-                    response: s.detail.clone(),
-                })
-                .collect(),
-            logs: r.logs.clone(),
-        };
-        let mut entries = self.entries.lock().expect("event log");
-        if entries.len() >= CAPACITY {
-            entries.pop_front();
-        }
-        entries.push_back(entry.clone());
-        Some(entry)
-    }
-
-    /// Newest first, at most `limit`, optionally only hits where a tag whose
-    /// name contains `tag` ran.
-    pub fn recent(&self, limit: usize, tag: Option<&str>) -> Vec<Entry> {
-        let entries = self.entries.lock().expect("event log");
-        entries
+    Some(Entry {
+        at: crate::state::now_ms(),
+        test,
+        path: path.to_string(),
+        status: r.response.status,
+        ms: elapsed.as_millis() as u64,
+        client: r.claimed_by.clone(),
+        client_error: r.client_error.clone(),
+        events: r.events.iter().map(summarize_event).collect(),
+        tags: r.tags.clone(),
+        sends: r
+            .sends
             .iter()
-            .rev()
-            .filter(|e| tag.is_none_or(|t| e.tags.iter().any(|x| x.tag.contains(t))))
-            .take(limit)
-            .cloned()
-            .collect()
-    }
+            .map(|s| SendSummary {
+                from: s.from.clone(),
+                method: s.method.clone(),
+                url: s
+                    .url
+                    .split(['?', '#'])
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+                result: s.result.clone().map_err(|e| without_queries(&e)),
+                response: s.detail.clone(),
+            })
+            .collect(),
+        logs: r.logs.clone(),
+    })
 }
 
 /// Drops the query from every URL in a message, such as a transport error
@@ -208,25 +156,18 @@ mod tests {
     }
 
     #[test]
-    fn keeps_hits_with_events_newest_first_and_drops_the_oldest() {
-        let log = EventLog::default();
-        assert!(
-            log.record("/g/collect", &hit(vec![], 204), Duration::ZERO, false)
-                .is_none()
-        );
-        for i in 0..CAPACITY + 5 {
-            let e = json!({ "event_name": format!("e{i}"), "client_id": "123.456", "value": 5 });
-            log.record("/g/collect", &hit(vec![e], 204), Duration::ZERO, false);
-        }
-        let recent = log.recent(1000, None);
-        assert_eq!(recent.len(), CAPACITY);
-        assert_eq!(recent[0].events[0].name, format!("e{}", CAPACITY + 4));
-        assert_eq!(recent.last().unwrap().events[0].name, "e5");
+    fn sums_up_hits_with_events_and_server_errors_without_identifiers() {
+        assert!(summary("/g/collect", &hit(vec![], 204), Duration::ZERO, false).is_none());
+        let e = json!({ "event_name": "purchase", "client_id": "123.456", "value": 5 });
+        let entry = summary("/g/collect", &hit(vec![e], 204), Duration::ZERO, false).unwrap();
+        assert_eq!(entry.events[0].name, "purchase");
         // No query (client id) and no visitor identifiers are kept.
-        let text = serde_json::to_string(&recent[0]).unwrap();
+        let text = serde_json::to_string(&entry).unwrap();
         assert!(!text.contains("123.456"), "{text}");
         assert!(text.contains("consent:ad_storage=denied"));
-        assert!(!recent[0].events[0].has_event_id);
+        assert!(!entry.events[0].has_event_id);
+        // A server error is worth showing even with no events.
+        assert!(summary("/x", &hit(vec![], 500), Duration::ZERO, true).is_some_and(|e| e.test));
     }
 
     #[test]
@@ -238,21 +179,5 @@ mod tests {
             "error sending request for url (https://www.google-analytics.com/g/collect): tunnel error? no"
         );
         assert_eq!(without_queries("timed_out"), "timed_out");
-    }
-
-    #[test]
-    fn filters_by_tag_and_keeps_server_errors() {
-        let log = EventLog::default();
-        log.record(
-            "/g/collect",
-            &hit(vec![json!({"event_name":"page_view"})], 204),
-            Duration::ZERO,
-            false,
-        );
-        log.record("/x", &hit(vec![], 500), Duration::ZERO, true);
-        assert_eq!(log.recent(10, None).len(), 2);
-        assert_eq!(log.recent(10, Some("Meta")).len(), 2);
-        assert_eq!(log.recent(10, Some("TikTok")).len(), 0);
-        assert!(log.recent(10, None)[0].test);
     }
 }

@@ -135,7 +135,7 @@ impl Traces {
                     ("events".into(), json!([])),
                     (
                         "tags".into(),
-                        json!({"success": 0, "failure": 0, "timeout": 0, "exception": 0}),
+                        json!({"success": 0, "failure": 0, "timeout": 0, "exception": 0, "skipped": 0}),
                     ),
                     ("tag_runs".into(), json!([])),
                     ("sends".into(), json!({"ok": 0, "failed": 0})),
@@ -155,6 +155,8 @@ impl Traces {
                 search.extend(r.claimed_by.iter().cloned());
                 search.extend(r.client_error.iter().cloned());
                 let (mut success, mut failure, mut timeout, mut exception) = (0, 0, 0, 0);
+                // Tags that chose not to send: neither a success nor an error.
+                let mut skipped = 0;
                 let mut runs = Vec::with_capacity(r.tags.len());
                 for t in &r.tags {
                     // A tag that threw keeps the error; one that failed on its own has none.
@@ -166,6 +168,7 @@ impl Traces {
                         "success" => success += 1,
                         "failure" => failure += 1,
                         "exception" => exception += 1,
+                        "skipped" => skipped += 1,
                         _ => timeout += 1,
                     }
                     runs.push(json!({"tag": t.tag, "event": t.event, "outcome": outcome}));
@@ -183,7 +186,7 @@ impl Traces {
                 }
                 let failed = r.sends.len() - ok;
                 let has_error = r.client_error.is_some()
-                    || success != r.tags.len()
+                    || success + skipped != r.tags.len()
                     || failed > 0
                     || r.response.status >= 500;
                 summary.extend([
@@ -194,7 +197,7 @@ impl Traces {
                     ("events".into(), json!(names)),
                     (
                         "tags".into(),
-                        json!({"success": success, "failure": failure, "timeout": timeout, "exception": exception}),
+                        json!({"success": success, "failure": failure, "timeout": timeout, "exception": exception, "skipped": skipped}),
                     ),
                     ("tag_runs".into(), Value::Array(runs)),
                     ("sends".into(), json!({"ok": ok, "failed": failed})),
@@ -272,11 +275,25 @@ impl Traces {
     /// Every hit's id and full record, newest first. `tenant` keeps one
     /// tenant's hits only.
     pub fn details(&self, tenant: Option<&str>) -> Vec<(u64, Value)> {
+        self.details_where(tenant, usize::MAX, |_| true)
+    }
+
+    /// The same, but only the hits `keep` wants and `limit` of them at
+    /// most. Hits wait on this lock to be recorded, so what the caller
+    /// would drop anyway is not copied while it is held.
+    pub fn details_where(
+        &self,
+        tenant: Option<&str>,
+        limit: usize,
+        keep: impl Fn(&Map<String, Value>) -> bool,
+    ) -> Vec<(u64, Value)> {
         let ring = self.ring.lock().expect("traces");
         ring.items
             .iter()
             .rev()
             .filter(|t| tenant.is_none() || t.tenant.as_deref() == tenant)
+            .filter(|t| keep(&t.detail))
+            .take(limit)
             .map(|t| (t.id, Value::Object(t.detail.clone())))
             .collect()
     }
@@ -325,20 +342,58 @@ pub fn capture(req: &IncomingRequest) -> Value {
             (k.clone(), v)
         })
         .collect();
-    let mut cut = req.body.len().min(MAX_BODY);
-    while !req.body.is_char_boundary(cut) {
+    // A JSON body (an order webhook) can hold a name, an address or an
+    // e-mail under any key, so only its shape is kept. A form body keeps
+    // everything but the plain user data.
+    let whole = match json_shape(&req.body) {
+        Some(shape) => shape,
+        None => req
+            .body
+            .split('\n')
+            .map(mask_params)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    let mut cut = whole.len().min(MAX_BODY);
+    while !whole.is_char_boundary(cut) {
         cut -= 1;
     }
-    let body: Vec<String> = req.body[..cut].split('\n').map(mask_params).collect();
     json!({
         "method": req.method,
         "path": req.path,
         "query": mask_params(&req.query),
         "headers": headers,
-        "body": body.join("\n"),
-        "body_truncated": cut < req.body.len(),
+        "body": &whole[..cut],
+        "body_truncated": cut < whole.len(),
         "remote_address": req.remote_address,
     })
+}
+
+/// A JSON body with every value taken out: the keys and the kinds of value
+/// stay, so the debugger still shows what arrived. None for a body that
+/// isn't JSON. One that starts like JSON but doesn't parse is not kept at
+/// all, since nothing in it can be told apart.
+fn json_shape(body: &str) -> Option<String> {
+    let text = body.trim_start();
+    if !text.starts_with('{') && !text.starts_with('[') {
+        return None;
+    }
+    fn shape(v: &mut Value) {
+        match v {
+            Value::Object(m) => m.values_mut().for_each(shape),
+            Value::Array(a) => a.iter_mut().for_each(shape),
+            Value::String(_) => *v = json!("[text]"),
+            Value::Number(_) => *v = json!("[number]"),
+            Value::Bool(_) | Value::Null => {}
+        }
+    }
+    match serde_json::from_str::<Value>(text) {
+        Ok(mut v) => {
+            shape(&mut v);
+            Some(v.to_string())
+        }
+        Err(_) => Some(format!("[{} bytes, not kept]", body.len())),
+    }
 }
 
 /// Headers that carry the visitor's IP address.
@@ -361,8 +416,9 @@ const AI_LOGS: usize = 100;
 const AI_LOG_LINE: usize = 500;
 
 /// A trace as the AI is given it: on top of what every trace already hides,
-/// the visitor's IP address is removed from the headers, the event data and
-/// the query, the body is cut to 8 KB and the logs to the last 100 lines.
+/// the visitor's IP address is removed from the headers, the event data,
+/// the query and the sends' addresses, the body is cut to 8 KB and the logs
+/// to the last 100 lines.
 pub fn for_ai(detail: &Value) -> Value {
     let mut t = detail.clone();
     let req = &mut t["request"];
@@ -407,6 +463,20 @@ pub fn for_ai(detail: &Value) -> Value {
     }
     if let Some(events) = t["result"].get_mut("events") {
         drop_keys(events, IP_KEYS);
+        // The hit as the browser sent it rides along with each event.
+        for e in events.as_array_mut().into_iter().flatten() {
+            if let Some(Value::String(raw)) = e.get_mut(crate::mpv2::RAW_HIT_KEY) {
+                *raw = drop_params(raw, IP_KEYS);
+            }
+        }
+    }
+    // The GA4 tag forwards the visitor's IP to Google as `_uip`.
+    for s in t["result"]["sends"].as_array_mut().into_iter().flatten() {
+        if let Some(Value::String(url)) = s.get_mut("url")
+            && let Some((base, query)) = url.split_once('?')
+        {
+            *url = format!("{base}?{}", drop_params(query, IP_KEYS));
+        }
     }
     t
 }
@@ -533,7 +603,12 @@ pub fn mask_result(result: &mut Value) {
     if let Some(events) = result.get_mut("events").and_then(Value::as_array_mut) {
         for ev in events {
             if let Some(u) = ev.get_mut("user_data") {
-                mask_user_data(u);
+                // `ep.user_data=jane@example.com` makes it a plain string.
+                if u.is_string() || u.is_number() {
+                    *u = json!(MASKED);
+                } else {
+                    mask_user_data(u);
+                }
             }
             if let Some(Value::String(raw)) = ev.get_mut(RAW_HIT_KEY) {
                 *raw = mask_params(raw);
@@ -559,10 +634,32 @@ pub fn mask_result(result: &mut Value) {
             if let Some(Value::String(url)) = s.get_mut("url")
                 && let Some((base, query)) = url.split_once('?')
             {
-                *url = format!("{base}?{}", mask_params(query));
+                *url = format!("{base}?{}", hide_secret_params(&mask_params(query)));
             }
         }
     }
+}
+
+/// Hides the value of a send's query parameter whose name says it holds a
+/// secret (Snapchat's `access_token`, an API `key`), so no trace, debug
+/// report or AI prompt carries it. The hit's own event and user parameters
+/// are left as sent.
+fn hide_secret_params(query: &str) -> String {
+    query
+        .split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((k, _))
+                if !["ep.", "epn.", "up.", "upn."]
+                    .iter()
+                    .any(|p| k.starts_with(p))
+                    && (k == "key" || crate::admin::secret_name(k)) =>
+            {
+                format!("{k}=[redacted]")
+            }
+            _ => pair.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// `_ga=GA1.1.1; _fbp=fb.1.2` becomes `_ga, _fbp`.
@@ -718,9 +815,33 @@ mod tests {
         let s = &all[1];
         assert_eq!(
             s["tags"],
-            json!({"success": 1, "failure": 1, "timeout": 0, "exception": 1})
+            json!({"success": 1, "failure": 1, "timeout": 0, "exception": 1, "skipped": 0})
         );
         assert_eq!(s["tag_runs"][2]["outcome"], "exception");
+
+        // A tag that skipped its event (no consent) is neither a success nor
+        // an error.
+        let skipped = RunResult {
+            claimed_by: Some("GA4".into()),
+            events: vec![json!({"event_name": "page_view"})],
+            tags: vec![
+                tag("GA4", "success", None),
+                tag("TikTok Events API", "skipped", None),
+            ],
+            ..Default::default()
+        };
+        t.record(
+            None,
+            hit("/g/collect"),
+            Duration::ZERO,
+            Outcome::Ran(&skipped),
+        );
+        let (newest, _) = t.list(&Filter::default());
+        assert_eq!(
+            newest[0]["tags"],
+            json!({"success": 1, "failure": 0, "timeout": 0, "exception": 0, "skipped": 1})
+        );
+        assert_eq!(newest[0]["has_error"], false);
         assert_eq!(s["sends"], json!({"ok": 0, "failed": 1}));
         assert_eq!(s["events"], json!(["purchase"]));
         assert_eq!(s["has_error"], true);
@@ -836,5 +957,45 @@ mod tests {
         assert_eq!(h[4][1], "Mozilla");
         assert_eq!(v["body"].as_str().unwrap().len(), MAX_BODY);
         assert_eq!(v["body_truncated"], true);
+    }
+
+    #[test]
+    fn a_json_body_keeps_its_shape_and_none_of_its_values() {
+        let req = IncomingRequest {
+            method: "POST".into(),
+            path: "/shopify/orders".into(),
+            body: r#"{"id":820982911946154508,"email":"jane@example.com","test":false,
+                "customer":{"first_name":"Jane","phone":"+491701234567"},
+                "line_items":[{"title":"Shirt","price":"19.90"}],"note":null}"#
+                .into(),
+            ..Default::default()
+        };
+        let v = capture(&req);
+        let body = v["body"].as_str().unwrap();
+        for plain in [
+            "jane@example.com",
+            "Jane",
+            "+491701234567",
+            "820982911946154508",
+        ] {
+            assert!(!body.contains(plain), "{plain}: {body}");
+        }
+        assert_eq!(
+            serde_json::from_str::<Value>(body).unwrap(),
+            json!({"id": "[number]", "email": "[text]", "test": false,
+                "customer": {"first_name": "[text]", "phone": "[text]"},
+                "line_items": [{"title": "[text]", "price": "[text]"}], "note": null})
+        );
+        // What only looks like JSON is not kept at all.
+        let broken = IncomingRequest {
+            body: r#"{"email":"jane@example.com""#.into(),
+            ..Default::default()
+        };
+        assert_eq!(capture(&broken)["body"], "[27 bytes, not kept]");
+
+        // A plain string where the user data object should be is masked too.
+        let mut result = json!({ "events": [{ "user_data": "jane@example.com" }] });
+        mask_result(&mut result);
+        assert_eq!(result["events"][0]["user_data"], MASKED);
     }
 }

@@ -36,6 +36,9 @@ pub struct Drafts {
     stats: Arc<TenantStats>,
     storage: crate::sandbox::Storage,
     epoch: AtomicU64,
+    /// Held across an edit or a publish, so two at once on this instance
+    /// can't both read the same draft and the later one drop the earlier.
+    write: Mutex<()>,
 }
 
 impl Drafts {
@@ -47,6 +50,7 @@ impl Drafts {
             stats: Default::default(),
             storage: Default::default(),
             epoch: AtomicU64::new(1),
+            write: Mutex::default(),
         }
     }
 
@@ -98,6 +102,7 @@ impl Drafts {
     /// `revision` is the draft's (or live's, without a draft). With `dry`,
     /// nothing is kept. A draft that ends up the same as live is dropped.
     pub fn edit(&self, revision: &str, change: Change, dry: bool) -> Result<Applied, EditError> {
+        let _w = self.write.lock().expect("drafts");
         let (live, live_rev) = self.file.text()?;
         let (before, before_rev, base) = match self.get() {
             Some(d) => (d.text, d.revision, d.base),
@@ -144,6 +149,7 @@ impl Drafts {
     /// the draft started from, unless `force`. With `dry`, only works it
     /// out, for the check before publishing.
     pub fn publish(&self, revision: &str, force: bool, dry: bool) -> Result<Applied, EditError> {
+        let _w = self.write.lock().expect("drafts");
         let Some(d) = self.get() else {
             return Err(EditError::Invalid("there is no draft to publish".into()));
         };

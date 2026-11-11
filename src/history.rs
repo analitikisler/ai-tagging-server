@@ -27,6 +27,17 @@ pub struct Before<'a> {
     pub text: &'a str,
 }
 
+/// An entry as lists show it: without the file it keeps, and whether it has
+/// one to go back to.
+fn listed(mut e: Value) -> Value {
+    let undoable = e["before"].is_string();
+    if let Some(m) = e.as_object_mut() {
+        m.remove("before");
+        m.insert("undoable".into(), json!(undoable));
+    }
+    e
+}
+
 impl History {
     pub fn new(state: Arc<State>) -> Self {
         History { state }
@@ -101,26 +112,27 @@ impl History {
             .rev()
             .take(limit)
             .filter_map(|n| self.state.read(&format!("history/{n}")))
-            .map(|mut e| {
-                let undoable = e["before"].is_string();
-                if let Some(m) = e.as_object_mut() {
-                    m.remove("before");
-                    m.insert("undoable".into(), json!(undoable));
-                }
-                e
-            })
+            .map(listed)
             .collect()
     }
 
-    /// Entries made at or after `from` (milliseconds), oldest first.
+    /// Entries made at or after `from` (milliseconds), oldest first. An
+    /// entry's name starts with the time it was made, so older ones are
+    /// passed over without being read: each holds a whole container file.
     pub fn since(&self, from: u64) -> Vec<Value> {
-        let mut out: Vec<Value> = self
-            .list(KEEP)
-            .into_iter()
+        self.state
+            .list("history")
+            .iter()
+            .filter(|n| {
+                n.split('-')
+                    .next()
+                    .and_then(|at| at.parse::<u64>().ok())
+                    .is_none_or(|at| at >= from)
+            })
+            .filter_map(|n| self.state.read(&format!("history/{n}")))
             .filter(|e| e["at"].as_u64().is_some_and(|at| at >= from))
-            .collect();
-        out.reverse();
-        out
+            .map(listed)
+            .collect()
     }
 
     /// The file as it was before entry `id`.

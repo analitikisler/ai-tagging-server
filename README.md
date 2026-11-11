@@ -64,7 +64,7 @@ Then:
 
 ## Under the hood
 
-- **Sandboxed templates.** Each template run gets its own [QuickJS](https://bellard.org/quickjs/) context with no ambient access: no `eval`, no `Function` constructor, nothing global but `require` and `data`. Runs have a time budget and a memory cap, and templates from files declare the permissions they need.
+- **Sandboxed templates.** Each template run gets its own [QuickJS](https://bellard.org/quickjs/) context with no ambient access: no `eval`, no `Function` constructor, nothing global but `require` and `data`. Runs have a time budget and a memory cap, and templates from files declare the permissions they need and run with the language's built-ins sealed, so they can't change what the checks rely on.
 - **Firing rules.** Tags fire only for the events that match their conditions.
 - **Cookies and event data.** `setCookie`, `getCookieValues` and `getEventData` work, so templates that manage first-party cookies run as written.
 - **Safe outgoing requests.** Sends to private, loopback, link-local and cloud-metadata addresses are refused.
@@ -103,6 +103,8 @@ With `DEBUG_TOKEN` set, add `__debug` to any hit and send the token in an `x-deb
 | `AI_MODEL` | `claude-opus-5-5` | The model the AI uses. A cheaper one, such as `claude-haiku-5-5`, costs less per call and answers less carefully. |
 | `AI_DAILY_LIMIT` | `200` | Most AI calls per instance per day (UTC), so the bill can't run away. |
 | `AI_BASE_URL` | `https://api.anthropic.com` | Where AI calls go, for a gateway or proxy in front of the Anthropic API. |
+| `GOOGLE_AUTH` | `auto` | Where the Google access token for [BigQuery inserts](docs/bigquery-export.md#3-server-settings) comes from: `auto`, `key`, `metadata` or `off`. `auto` uses the key file when `GOOGLE_APPLICATION_CREDENTIALS` is set, else the metadata server on Cloud Run, else nothing. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | none | Path to a service account key file, for BigQuery inserts from a host outside Google Cloud. |
 | `DEBUG_TOKEN` | off | Enables the `__debug` report. At least 16 characters. Accepted only in the `x-debug-token` header, so it never appears in URL logs. |
 | `OUTGOING_ALLOW_PRIVATE` | `0` | `1` allows sends to private and internal addresses. Otherwise every address a name resolves to is checked when connecting, redirects aren't followed, and `HTTP_PROXY`/`HTTPS_PROXY` are ignored. |
 | `SEND_RETRIES` | `1` | Extra attempts for an outgoing send after a failed connection or a 502, 503 or 504 answer (max 5). Timeouts aren't retried, and all attempts stay within the request's time budget. |
@@ -124,7 +126,7 @@ It prints requests per second and latency percentiles. Every hit counts in the p
 
 ## AI features
 
-Set `ANTHROPIC_API_KEY` (with `ADMIN_TOKEN`) and the admin console gets an AI that works on the setup and never on the hits: no hit waits for it or pays for it. It answers only when someone clicks, and it never changes the container. A suggested tag change opens in the tag editor, filled in and not saved, for you to check and save.
+Set `ANTHROPIC_API_KEY` (with `ADMIN_TOKEN`) and the admin console gets an AI that works on the setup and never on the hits: no hit waits for it or pays for it. It answers only when someone clicks, apart from a short likely cause for each new [alert](#alerts-history-and-safe-changes) (three per check at most), and it never changes the container. A suggested tag change opens in the tag editor, filled in and not saved, for you to check and save.
 
 - **Explain a hit.** In Live, a hit's Summary has "Explain with AI": the AI reads the trace and the container and says whether the hit went as it should, which condition stopped a tag, what a vendor's refusal means, and what to change. One call, a few cents; asking again about the same hit and container is free.
 - **AI audit.** A page under Debug. The server counts the trace buffer itself (each tag's runs, sends by event, tags that never fired, several tags sending one hit to the same vendor, sends a vendor keeps refusing) and the AI picks and explains the findings: dead tags, duplicate sends, events a platform doesn't use, failing sends. What each finding saves, in sends per 1,000 hits, is worked out by the server from the counts, not by the model. One call, around 10 to 25 cents.
@@ -142,7 +144,7 @@ What the AI is sent: the trace as the console shows it (plain user data already 
 With `CONTAINER_FILE` and the admin console, edits don't go live as they are saved. They collect in a **draft**, kept in the state folder, like a GTM workspace: the console shows and edits the draft, with a bar listing what it changes against live. Each edit still gets the check against recent and pinned hits.
 
 - **Publish** puts the whole draft live as a named version, with a note, after the same check against live. A draft started before live changed (another publish, a hand edit to the file) is only published over that change when you confirm. Every instance runs the new version within a few seconds.
-- **Preview** the draft in one browser: on the Setup check page, "Preview the draft" gives a code; opening the site with `?sst_check=<code>` makes that browser run the draft, and a `_sst_check` cookie keeps its next pages on the draft for 4 hours. Everyone else keeps the live container. Sends are dry unless you choose "Send for real": the draft runs fully, but nothing reaches the platforms. The live check shows that browser's hits and gives the draft's test result for a conversion. Preview hits show as `preview` in the debugger and stay out of the counts behind alerts and the setup check.
+- **Preview** the draft in one browser: on the Setup check page, "Preview the draft" gives a code; opening the site with `?sst_check=<code>` makes that browser run the draft, and a `_sst_check` cookie keeps its next pages on the draft for 4 hours. Everyone else keeps the live container. Sends are dry unless you choose "Send for real": the draft runs fully, but nothing reaches the platforms (Google's own scripts are still fetched, so the page's tags load). A preview's answers are never cacheable. The live check shows that browser's hits and gives the draft's test result for a conversion. Preview hits show as `preview` in the debugger and stay out of the counts behind alerts and the setup check.
 - **Discard** drops the draft. **Rollback**: History lists each published version; Undo puts live back to before one.
 
 `POST /admin/api/container/publish` (`{ "revision", "name", "note", "force" }`, `"check": true` for the check), `DELETE /admin/api/container/draft`, and `POST /admin/api/checkup/live` with `{ "preview": true, "send": false }`. Edits through the API go to the draft the same way.
@@ -179,12 +181,12 @@ These need the admin console (`ADMIN_TOKEN`). They work without the AI; with it,
 | Key event stopped | none in the last hour, when 10 or more are usual |
 | Key event dropped | 70% below usual (a warning at 50% when 20 or more are usual) |
 | Vendor refusing sends | 20% or more of 20 or more sends failed, at least twice the usual rate |
-| Tag failing | 20% or more of 20 or more runs failed, threw or timed out, at least twice the usual rate |
-| Value missing | `value` or `currency` on purchases, or `event_id` on key events when Meta or TikTok are sent to, missing on 20% or more |
-| Unclaimed hits | 20% or more of 20 or more hits no client claimed |
+| Tag failing | 20% or more of 20 or more runs failed, threw or timed out, at least twice the usual rate. Runs that skipped their event don't count either way |
+| Value missing | `value` or `currency` on purchases, or `event_id` on key events when Meta or TikTok are sent to, missing on 20% or more of 10 or more events, at least twice the usual rate |
+| Unclaimed hits | 20% or more of 20 or more hits no client claimed, at least twice the usual rate |
 | Event renamed | a name never seen before (10 or more) while one spelled the same but for case or separators falls by half (`purchase` → `Purchase`) |
 
-Key events are `purchase`, `generate_lead`, `sign_up` and `add_to_cart` by default, set on the console's Alerts page. Drops, stops and renames wait for 3 days of history. "Usual" is the median of the earlier days; rates are pooled over them. An alert names the setup changes made in the 3 hours before it started, gets the AI's likely cause when the AI is on, and is posted to Slack (`SLACK_WEBHOOK_URL`, in English or Turkish) when it opens, when it gets worse (at most hourly) and when it resolves; a check posts at most 5 messages. Checks run every `ALERT_INTERVAL_S` on a server that keeps running, and from `POST /admin/api/alerts/check` (the deploy script's Cloud Scheduler job, every 5 minutes, with `CHECK_TOKEN`); a lock in the state folder keeps two from running at once.
+Key events are `purchase`, `generate_lead`, `sign_up` and `add_to_cart` by default, set on the console's Alerts page. Drops, stops and renames wait for 3 days of history. "Usual" is the median of the earlier days; rates are pooled over them. An alert names the setup changes made in the 3 hours before it started, gets the AI's likely cause when the AI is on, and is posted to Slack (`SLACK_WEBHOOK_URL`, in English or Turkish) when it opens, when it gets worse (at most hourly) and when it resolves; a check posts at most 5 messages, and one Slack didn't take goes out with the next check. An alert resolves when a check finds its condition healthy again: an hour with too little traffic to tell leaves it open, for a day at most. Checks run every `ALERT_INTERVAL_S` on a server that keeps running, and from `POST /admin/api/alerts/check` (the deploy script's Cloud Scheduler job, every 5 minutes, with `CHECK_TOKEN`); a lock in the state folder keeps two from running at once.
 
 **History and undo.** Every container save from the console is kept with the file as it was and what changed (tags added, deleted or changed and which fields, the order, transformations; never setting values), and every Integrations save is noted. The History page lists them, newest first; Undo puts the container back as it was before a change. The last 200 are kept. The kept files hold the container's settings, secrets included, in the state folder next to the container itself.
 
@@ -251,6 +253,10 @@ With `ADMIN_TOKEN` set, `/admin` serves the console: a debugger for recent hits 
 | `PUT /admin/api/container/setup` | Replaces every tag and transformation (`{ "revision", "tags": [...], "transformations": [...] }`). |
 | `POST /admin/api/ai/review?lang=en\|tr` | With the AI on: reviews a change's check result (`{ "edits", "replay" }`). |
 | `POST /admin/api/ai/audit?lang=en\|tr` | With the AI on: audits the container against the trace buffer (`&tenant=<id>` with tenants). |
+| `GET /admin/api/integrations` | With `INTEGRATIONS_FILE`: each platform's fields (secrets never returned, only whether they are set), the enrichment settings and the events a test can send. |
+| `PUT /admin/api/integrations/<id>` | Saves one platform (`{ "enabled", "fields": { ... } }`). A secret sent empty keeps the stored one. |
+| `POST /admin/api/integrations/<id>/test` | Sends one made-up event through the platform's tag (`{ "event", "test_event_code", "test_mode" }`, all optional; the test settings apply to this event only). |
+| `PUT /admin/api/enrichment` | Saves the enrichment settings (`{ "enabled", "url", "key", "header_name", "header_value", "event_user_data" }`). |
 | `GET /admin/api/tenants` | Tenants and their counters. |
 | `POST /admin/api/tenants` | Creates a tenant (JSON body as above). |
 | `PUT /admin/api/tenants/<id>` | Replaces a tenant's settings. |
@@ -258,7 +264,7 @@ With `ADMIN_TOKEN` set, `/admin` serves the console: a debugger for recent hits 
 
 With `CONTAINER_FILE`, tags can be added, changed, turned off, reordered and deleted from the console. A save rewrites the file's `tags` list (a temporary file renamed over it) and leaves every other key as written; the new container is checked like a startup first, and a change that doesn't load is refused with nothing written. Every instance re-reads the file within a few seconds of a change, so saves and hand edits apply without a restart, and a file that no longer loads is ignored with a warning. Each save sends the `revision` it was edited from and gets `409` if the file changed since. Settings shown as `[redacted]` keep their stored value when saved unchanged. The built-in container and tenants' containers can't be edited. In integrated mode the platform tags come after the file's own and are set up under Integrations.
 
-Traces stay in the process's memory, so on Cloud Run each instance keeps its own. They drop the values of the `authorization`, `x-debug-token` and `x-proxy-secret` headers and keep only cookie names, but keep the query and up to 16 KB of the body, which can carry personal data: only people allowed to see the hits should hold the token, and `TRACE_BUFFER=0` keeps nothing. Plain user-provided data never reaches a trace or the `__debug` report: it shows as `[hashed before sending]` in events, in the request's query and body, in each event's raw hit and in forwarded URLs, and SHA-256 digests are kept. The GA4 tag forwards the hit to Google as the browser sent it, plain user data included, unless its `stripUserData` is on.
+Traces stay in the process's memory, so on Cloud Run each instance keeps its own. They drop the values of the `authorization`, `x-debug-token` and `x-proxy-secret` headers and keep only cookie names, but keep the query and up to 16 KB of a form body, which can carry personal data (of a JSON body, such as a Shopify order, only the keys are kept, never the values): only people allowed to see the hits should hold the token, and `TRACE_BUFFER=0` keeps nothing. Plain user-provided data never reaches a trace or the `__debug` report: it shows as `[hashed before sending]` in events, in the request's query and body, in each event's raw hit and in forwarded URLs, and SHA-256 digests are kept. The GA4 tag forwards the hit to Google as the browser sent it, plain user data included, unless its `stripUserData` is on.
 
 The admin routes work on any host and don't need `PROXY_SECRET`, because the edge proxy only forwards the tracking path and the token guards the rest. A wrong token is answered after half a second, and wrong tokens sent in parallel wait their turn, so an instance answers about eight guesses a second. Keep the token in Secret Manager like the other secrets, and don't route `/admin` through your Worker.
 
@@ -266,12 +272,20 @@ The admin routes work on any host and don't need `PROXY_SECRET`, because the edg
 
 ## Containers
 
-A container file lists templates, clients and tags. Template paths are relative to the file. The built-in `ga4_client`, `ga4_tag` and `google_scripts_client` are always available.
+A container file lists templates, clients and tags. Template paths are relative to the file. The built-in templates are always available: `ga4_client`, `ga4_tag`, `google_scripts_client`, the ad platform tags (`meta_capi`, `tiktok_events`, `pinterest_capi`, `google_ads`, `snapchat_capi`, `reddit_capi`, `linkedin_capi`, `x_capi`), `bigquery_export` and `shopify_client`.
 
 ```json
 {
   "version": "1",
-  "templates": { "purchase_logger": "templates/purchase_logger.js" },
+  "templates": {
+    "purchase_logger": {
+      "file": "templates/purchase_logger.js",
+      "permissions": {
+        "read_event_data": { "keys": ["transaction_id", "value", "currency"] },
+        "logging": {}
+      }
+    }
+  },
   "clients": [
     { "name": "GA4", "template": "ga4_client", "data": { "extendGaCookie": true } }
   ],
@@ -290,7 +304,7 @@ A container file lists templates, clients and tags. Template paths are relative 
 
 A tag with `"enabled": false` never fires and stays in the file. Tag names are unique, at most 100 characters.
 
-A template can be a path, or `{ "file": ..., "permissions": {...} }`. A `.tpl` file exported from Google's template editor or the gallery works too: its code and its server permissions are read from the file.
+A template is `{ "file": ..., "permissions": {...} }`, or just a path when it needs no permissions (see [below](#template-permissions-and-checks)). A `.tpl` file exported from Google's template editor or the gallery works too: its code and its server permissions are read from the file.
 
 See [`examples/container.json`](examples/container.json).
 
@@ -321,7 +335,7 @@ A container's `transformations` change event data on the server before tags see 
 | `{ "op": "set", "key", "value", "only_if_missing" }` | Sets a key to any JSON value; with `only_if_missing`, only when it has none. |
 | `{ "op": "copy", "from", "to" }` | Copies a value to another key. |
 | `{ "op": "map", "key", "to", "table", "default", "ignore_case" }` | Looks the value up in `table` by its string form and writes the result to `to` (or back to `key`). No match keeps the value, or writes `default` when set. |
-| `{ "op": "format", "key", "format" }` | `lower`, `upper`, `trim`, `number` (from `"49,90"` or `"1,234.50"`; anything else is left as it was) or `string`. |
+| `{ "op": "format", "key", "format" }` | `lower`, `upper`, `trim`, `number` (from `"49,90"`, `"1,234.50"` or `"1.234,50"`; anything else is left as it was) or `string`. |
 | `{ "op": "remove", "keys" }` | Takes the keys out. |
 | `{ "op": "keep", "keys" }` | Keeps only these keys and `event_name`. |
 
@@ -343,17 +357,18 @@ Permissions, with the APIs they cover. Parameters are checked on every call, and
 
 | Permission | Parameters | APIs |
 | --- | --- | --- |
-| `send_http` | `urls`: patterns, `*` matches anything | `sendHttpRequest`, `sendHttpGet` |
+| `send_http` | `urls`: patterns, `*` matches anything; in the host it stays in the host, so `https://*.example.com/*` covers subdomains and nothing else | `sendHttpRequest`, `sendHttpGet` |
 | `read_event_data` | `keys`: patterns; `getAllEventData` needs `["*"]` | `getEventData`, `getAllEventData` |
 | `get_cookies` | `names`: patterns | `getCookieValues` |
 | `set_cookies` | `names`: patterns | `setCookie` |
-| `read_request` | none | `getRequestMethod`, `getRequestPath`, `getRequestQueryString`, `getRequestQueryParameter(s)`, `getRequestHeader`, `getRequestBody`, `getRemoteAddress` |
+| `read_request` | none | `getRequestMethod`, `getRequestPath`, `getRequestQueryString`, `getRequestQueryParameter(s)`, `getRequestHeader`, `getRequestBody`, `getRemoteAddress`, `isRequestMpv1`, `isRequestMpv2`, `extractEventsFromMpv1`, `extractEventsFromMpv2` |
 | `access_response` | none | `setResponseStatus`, `setResponseHeader`, `setResponseBody`, `setPixelResponse` |
+| `access_bigquery` | `tables`: `project.dataset.table` patterns | `BigQuery.insert` (see the [BigQuery guide](docs/bigquery-export.md#custom-templates)) |
 | `return_response`, `run_container`, `read_container_data`, `access_template_storage`, `logging` | none | `returnResponse`, `runContainer`, `getContainerVersion`, `templateDataStorage`, `logToConsole` |
 
-Cookie domain, path and header restrictions from a `.tpl` are not enforced beyond the names. Permissions for APIs this server doesn't have yet (BigQuery, Firestore and the like) are ignored when a `.tpl` is read.
+Cookie domain, path and header restrictions from a `.tpl` are not enforced beyond the names. Permissions for APIs this server doesn't have yet (Firestore and the like) are ignored when a `.tpl` is read.
 
-Upgrading: a custom template in a container file used to run with every API. Add its permissions as above, or the server won't load it.
+Upgrading: a custom template in a container file used to run with every API. Add its permissions as above, or the server won't load it. `isRequestMpv1`, `isRequestMpv2`, `extractEventsFromMpv1` and `extractEventsFromMpv2` read the whole hit, so they now need `read_request` as in Google's sGTM: a custom client that calls them without it has to declare it.
 
 ## Ad platforms (Meta, TikTok, Pinterest, Google Ads)
 
@@ -380,7 +395,7 @@ It needs a conversion action in the account, an OAuth client and a refresh token
 
 Consent Mode v2: a tag sends only when the hit grants both `ad_storage` and `ad_user_data`. The server reads them from the hit's `gcd` parameter and falls back to `gcs` for ad storage. A denied signal always skips the event. So does a signal the hit doesn't carry (for example a hit with `gcs` but no `gcd`, from an older tag setup), unless the platform's "Send when the hit has no consent signals" switch is on, which is meant for sites without Consent Mode.
 
-A skipped event is reported as `skipped`, not as a success, with its reason in the request's log line, for example `tag[Meta Conversions API]=skipped(consent:ad_user_data=denied)`. Reasons are `unmapped_event`, `consent:<signal>=denied` and `consent:<signal>=missing`. `/system` and the admin counters count skipped tags apart from successes and failures.
+A skipped event is reported as `skipped`, not as a success, with its reason in the request's log line, for example `tag[Meta Conversions API]=skipped(consent:ad_user_data=denied)`. Reasons are `unmapped_event`, `consent:<signal>=denied` and `consent:<signal>=missing`; LinkedIn and X also skip with `no_user_id`, the BigQuery export with `event_not_selected`, and the GA4 tag an event that isn't a GA4 hit (a Shopify order) with `not_a_ga4_hit`. A skipped run is not a failure: it has its own count in the console, the setup check and the alerts. `/system` and the admin counters count skipped tags apart from successes and failures.
 
 Snapchat, Reddit, LinkedIn and X have their own [setup guide](docs/ad-platforms.md). The tags are tested against stand-ins for the platforms, not against real accounts, so use each platform's test mode first where it has one (LinkedIn and X don't).
 
@@ -403,7 +418,7 @@ With an enrichment endpoint set, each tag calls it for every conversion: `GET <u
   "city": "Berlin", "state": "be", "zip": "10115", "country": "de", "external_id": "cust-7" }
 ```
 
-Every field is optional and may be plain or already a SHA-256 hex digest. Plain values are normalised (trimmed and lower-cased, phone numbers reduced to digits) and hashed before they leave the server, and each platform gets the fields it accepts (TikTok: email, phone, external id). Answers are kept for five minutes per visitor, so a busy visitor doesn't hit your server on every event; two tags running for the same first event may each ask once. A slow (2 s limit) or failing endpoint never stops a conversion: it is sent without the extra fields. The endpoint must be `https://`, and addresses inside your own network are refused like any other outgoing send.
+Every field is optional and may be plain or already a SHA-256 hex digest. Plain values are normalised (trimmed and lower-cased, phone numbers reduced to digits, with the `+` of E.164 for TikTok and X, which match on that form) and hashed before they leave the server, and each platform gets the fields it accepts (TikTok: email, phone, external id). Answers are kept for five minutes per visitor, so a busy visitor doesn't hit your server on every event; two tags running for the same event share one lookup. A slow (2 s limit) or failing endpoint never stops a conversion: it is sent without the extra fields. The endpoint must be `https://`, and addresses inside your own network are refused like any other outgoing send.
 
 **User data sent with the event.** Turn on "Use user data sent with the event" (`event_user_data` in the enrichment settings) and the tags also use the user-provided data the page sends with GA4 events, with or without an endpoint. The GA4 client puts it in event data as Google's sGTM does, under `user_data`: `email_address`, `phone_number`, `address.first_name`, `last_name`, `street`, `city`, `region`, `postal_code`, `country`, and `sha256_email_address`, `sha256_phone_number`, `address.sha256_first_name`, `address.sha256_last_name`. It reads `ep.user_data.*` parameters (`email` and `phone` count as `email_address` and `phone_number`) and the Google tag's `em` envelope (`tv.1~em.<hash>~ph.<hash>…`), whose base64 digests become hex. Plain values are normalised and hashed like the endpoint's, digests are sent as they are, and where the endpoint answers a field too, its answer wins. A container file's own `meta_capi`, `tiktok_events` or `pinterest_capi` tag turns it on with `"eventUserData": true` in its `data`. Events the server makes itself, such as the Shopify order webhook's (marked with `x-sst-source`), carry the buyer's own details: the tags use those without the switch, and they win over the endpoint's answer.
 
@@ -470,6 +485,7 @@ Tags must call `data.gtmOnSuccess()` or `data.gtmOnFailure()`. A tag that decide
 | Strings, URLs, regex | `parseUrl`, `computeEffectiveTldPlusOne`, `encodeUri`, `encodeUriComponent`, `decodeUri`, `decodeUriComponent`, `createRegex`, `testRegex` |
 | Types | `getType`, `makeString`, `makeNumber`, `makeInteger`, `makeTableMap` |
 | Encoding and hashing | `toBase64`, `fromBase64`, `sha256`, `sha256Sync`, `hmacSha256` |
+| BigQuery | `BigQuery.insert` |
 | Other | `getTimestampMillis`, `getTimestamp`, `generateRandom`, `callLater`, `logToConsole`, `templateDataStorage`, `JSON`, `Math`, `Object`, `Promise` |
 
 Notes on the newer APIs:
@@ -479,13 +495,13 @@ Notes on the newer APIs:
 - `addEventCallback(callback)` is for tags. The callback runs once every tag of the event has reported, as `callback(containerId, { tags: [{ id, status, executionTime }] })`. `status` is `success`, `failure`, `exception` or `timeout` (a skipped tag reports `success`, as sGTM has no such status); `id` is the tag's name and `executionTime` is always `0`.
 - `sendMessage(type, message)` reaches every listener of that type from `addMessageListener(type, callback)`, which is called as `callback(type, message)`. Delivery is not instant: listeners run after the sending code finishes. A run delivers at most 1000 messages.
 
-Registered but not built yet (calling them throws): `sendEventToGoogleAnalytics`, `sendPixelFromBrowser`, `getGoogleScript`, `getGoogleAuth`, `BigQuery`, `Firestore`.
+Registered but not built yet (calling them throws): `sendEventToGoogleAnalytics`, `sendPixelFromBrowser`, `getGoogleScript`, `Firestore`. `getGoogleAuth` throws on purpose: the server's Google token never reaches a template, and `BigQuery.insert` adds it on the way out.
 
 Not yet: loading a container exported from Google Tag Manager.
 
 ## Deploy: Cloud Run behind Cloudflare
 
-1. `PROJECT_ID=<your project> ./deploy/cloud-run.sh` builds the image with Cloud Build and deploys it to Cloud Run in `europe-west3` (Frankfurt), scaling to zero when idle. It keeps `PROXY_SECRET` and `DEBUG_TOKEN` in Secret Manager, and runs the service as its own service account (`<service>-run`), which can read those two secrets and nothing else.
+1. `PROJECT_ID=<your project> SCRIPT_IDS=GTM-XXXXXXX,G-XXXXXXX ./deploy/cloud-run.sh` builds the image with Cloud Build and deploys it to Cloud Run in `europe-west3` (Frankfurt), scaling to zero when idle. It keeps `PROXY_SECRET` and `DEBUG_TOKEN` in Secret Manager, and runs the service as its own service account (`<service>-run`), which can read those two secrets and nothing else. `SCRIPT_IDS` are the ids whose scripts the server serves, and its `G-` ids are the GA4 properties hits are accepted for (or set `MEASUREMENT_IDS`); the script stops without either, as the server would.
 2. Put the printed service URL in [`deploy/cloudflare/wrangler.toml`](deploy/cloudflare/wrangler.toml) as `ORIGIN_URL`, run `npx wrangler deploy` there, and set the same `PROXY_SECRET` on the Worker. The Worker serves the server at `https://your-site/k7q2/*`: change `/k7q2` (the route and `PATH_PREFIX`) to a short path of your own. Ad blockers match words like `analytics`, `metrics`, `tracking`, `gtm`, `gtag` or `ad` in hostnames and paths, so a meaningless one lasts longer; the Setup check warns about such words. The Worker also passes the visitor's location from Cloudflare (`x-sst-geo-country`, `-region`, `-city`, `-postal-code`) for the GA4 client's `visitorInfo`, after dropping any a visitor sent.
    The script sets `ORIGIN_CHECK=enforce`, so hits that don't come from your site's pages get `403`. To watch first, deploy with `ORIGIN_CHECK=log` and look for `origin_check=would_reject` in the service's logs: `gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="tagging-server" AND textPayload:"origin_check=would_reject"' --project <your project> --freshness 7d --limit 50`.
 3. Optional: `INTEGRATIONS_BUCKET=<name> PROJECT_ID=... ./deploy/cloud-run.sh` also creates a Cloud Storage bucket for the integrations file and the shared state, mounts it at `/data` (`STATE_DIR=/data/state`), creates `ADMIN_TOKEN` and `CHECK_TOKEN` in Secret Manager, sets `ADMIN_URL`, creates a Cloud Scheduler job that runs the alert checks every 5 minutes, and prints the admin page address (`<service url>/admin`, opened directly, not through the Worker). Add `SLACK_WEBHOOK_URL=https://hooks.slack.com/...` to post alerts to Slack; it is kept in Secret Manager, so later deploys don't need it again. The volume, scheduler and Slack steps have not been run against a real project yet. For [multi-tenant hosting](#multi-tenant-hosting) use `TENANTS_BUCKET=<name>` instead: the bucket then holds `tenants.json` and the shared state, edited from the same admin page, and `SCRIPT_IDS`, `MEASUREMENT_IDS`, `SITE_DOMAINS` and `ORIGIN_CHECK` are set per tenant there. The two can't be combined.

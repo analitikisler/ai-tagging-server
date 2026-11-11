@@ -117,7 +117,7 @@ pub(super) fn bindings<'js>(
         "runContainer",
         Function::new(ctx.clone(), move |json: String| -> i32 {
             let mut s = st.borrow_mut();
-            if s.events.len() >= 100 {
+            if s.events.len() >= crate::mpv2::MAX_EVENTS {
                 return -1;
             }
             let data: Value =
@@ -141,7 +141,13 @@ pub(super) fn bindings<'js>(
             let mut s = st.borrow_mut();
             if s.logs.len() < 1000 {
                 let mut line = format!("[{}] {line}", s.meta[idx].name);
-                line.truncate(1024);
+                // Cut on a character boundary: `truncate` panics inside one,
+                // and a panic here takes the worker thread with it.
+                let mut cut = line.len().min(1024);
+                while !line.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                line.truncate(cut);
                 s.logs.push(line);
             }
         })?,

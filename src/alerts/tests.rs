@@ -86,6 +86,7 @@ fn failing_vendors_and_tags_are_found_even_while_learning() {
         Runs {
             runs: 30,
             failed: 18,
+            skipped: 0,
         },
     );
     let f = evaluate("shop", &now, &[], &Config::default());
@@ -277,6 +278,7 @@ async fn the_ai_explains_new_alerts_and_another_check_waits_for_the_lock() {
         Runs {
             runs: 30,
             failed: 30,
+            skipped: 0,
         },
     );
     put(&state, q - 1, c);
@@ -302,6 +304,128 @@ async fn the_ai_explains_new_alerts_and_another_check_waits_for_the_lock() {
         )
         .unwrap();
     assert!(alerts.check(Context { explain: None }).await["skipped"].is_string());
+}
+
+#[tokio::test]
+async fn an_alert_that_cant_be_judged_stays_open_and_a_worse_one_is_posted_later() {
+    let state = Arc::new(State::memory());
+    let (url, slack) = fake_slack().await;
+    let alerts = Alerts::new(
+        state.clone(),
+        Arc::new(History::new(state.clone())),
+        None,
+        Some(url),
+        None,
+    );
+    let q = quarter_now();
+    let meta = |runs, failed, skipped| {
+        let mut c = counts(&[("purchase", 30)]);
+        c.tags.insert(
+            "Meta".into(),
+            Runs {
+                runs,
+                failed,
+                skipped,
+            },
+        );
+        c
+    };
+    // 8 of 30 runs failed: a warning.
+    put(&state, q - 1, meta(30, 8, 0));
+    let r = alerts.check(Context { explain: None }).await;
+    assert_eq!(r["opened"], 1, "{r}");
+    assert!(slack.0.lock().unwrap()[0].starts_with("🟠"));
+
+    // Within the hour it becomes a problem: not posted yet, but not forgotten.
+    put(&state, q - 1, meta(30, 30, 0));
+    alerts.check(Context { explain: None }).await;
+    assert_eq!(slack.0.lock().unwrap().len(), 1);
+    let mut s = state.read("alerts/state.json").unwrap();
+    let id = s["open"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    assert_eq!(s["open"][&id]["notified_severity"], "warning");
+    // An hour after the first post, the next check says it got worse.
+    s["open"][&id]["notified_at"] = json!(now_ms() - REPEAT_MS);
+    state.write("alerts/state.json", &s).unwrap();
+    alerts.check(Context { explain: None }).await;
+    let posted = slack.0.lock().unwrap().clone();
+    assert_eq!(posted.len(), 2, "{posted:?}");
+    assert!(posted[1].starts_with("Worse: 🔴"), "{}", posted[1]);
+
+    // A quiet hour: five runs say nothing either way, so it stays open.
+    put(&state, q - 1, meta(5, 0, 0));
+    let r = alerts.check(Context { explain: None }).await;
+    assert_eq!(
+        (r["resolved"].clone(), r["open"].clone()),
+        (json!(0), json!(1)),
+        "{r}"
+    );
+    // So do runs that all skipped their event: nothing was tried.
+    put(&state, q - 1, meta(30, 0, 30));
+    let r = alerts.check(Context { explain: None }).await;
+    assert_eq!(r["open"], 1, "{r}");
+
+    // Enough runs, all fine: now it is over.
+    put(&state, q - 1, meta(30, 0, 0));
+    let r = alerts.check(Context { explain: None }).await;
+    assert_eq!(r["resolved"], 1, "{r}");
+    assert!(slack.0.lock().unwrap()[2].starts_with("✅"));
+}
+
+#[tokio::test]
+async fn a_message_slack_didnt_take_goes_out_with_the_next_check() {
+    let state = Arc::new(State::memory());
+    // Nothing listens here, so the first post fails.
+    let down = Alerts::new(
+        state.clone(),
+        Arc::new(History::new(state.clone())),
+        None,
+        Some("http://127.0.0.1:9/hook".into()),
+        None,
+    );
+    let q = quarter_now();
+    let mut c = counts(&[("purchase", 30)]);
+    c.tags.insert(
+        "Meta".into(),
+        Runs {
+            runs: 30,
+            failed: 30,
+            skipped: 0,
+        },
+    );
+    put(&state, q - 1, c);
+    let r = down.check(Context { explain: None }).await;
+    assert_eq!(
+        (r["opened"].clone(), r["posted"].clone()),
+        (json!(1), json!(0)),
+        "{r}"
+    );
+    assert!(r["slack_error"].is_string());
+
+    // Slack is back: the same state, a working address.
+    let (url, slack) = fake_slack().await;
+    let up = Alerts::new(
+        state.clone(),
+        Arc::new(History::new(state.clone())),
+        None,
+        Some(url),
+        None,
+    );
+    let r = up.check(Context { explain: None }).await;
+    assert_eq!(r["posted"], 1, "{r}");
+    assert!(
+        slack.0.lock().unwrap()[0].contains("Meta"),
+        "{:?}",
+        slack.0.lock().unwrap()
+    );
+    // And only once.
+    up.check(Context { explain: None }).await;
+    assert_eq!(slack.0.lock().unwrap().len(), 1);
 }
 
 #[test]

@@ -51,7 +51,14 @@ impl State {
     }
 
     pub fn memory() -> Self {
-        let seed = format!("{}-{}", std::process::id(), now_ms());
+        // Random, not only the process id and the time: instances are all
+        // PID 1 in their containers and can start in the same millisecond.
+        let seed = format!(
+            "{}-{}-{:016x}",
+            std::process::id(),
+            now_ms(),
+            crate::store::unique()
+        );
         let id: String = Sha256::digest(seed.as_bytes())[..6]
             .iter()
             .map(|b| format!("{b:02x}"))
@@ -92,10 +99,10 @@ impl State {
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 }
-                let tmp = path.with_extension(format!("tmp-{}", self.instance));
-                let bytes = serde_json::to_vec(v).map_err(|e| e.to_string())?;
-                std::fs::write(&tmp, bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
-                std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+                // Its own temporary file per write, readable by the owner
+                // only: drafts and history hold the container's secrets.
+                let text = serde_json::to_string(v).map_err(|e| e.to_string())?;
+                crate::store::save(&path, &text)
             }
             None => {
                 self.memory
@@ -156,7 +163,7 @@ impl State {
                     .collect()
             }
         };
-        names.retain(|n| !n.contains(".tmp-"));
+        names.retain(|n| !n.contains(".tmp-") && !n.ends_with(".tmp"));
         names.sort();
         names.dedup();
         names

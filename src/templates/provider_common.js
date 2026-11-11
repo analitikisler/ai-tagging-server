@@ -35,6 +35,14 @@ const hashPhone = (v) => {
   const digits = s.replace(/[^0-9]/g, '');
   return digits ? sha256Sync(digits, { outputEncoding: 'hex' }) : undefined;
 };
+// TikTok and X match on the E.164 number, with its plus: "+491701234567".
+const hashPhoneE164 = (v) => {
+  if (v === undefined || v === null || v === '') return undefined;
+  const s = makeString(v).trim();
+  if (isHash(s.toLowerCase())) return s.toLowerCase();
+  const digits = s.replace(/[^0-9]/g, '').replace(/^00/, '');
+  return digits ? sha256Sync('+' + digits, { outputEncoding: 'hex' }) : undefined;
+};
 const clean = (obj) => {
   const out = {};
   Object.keys(obj).forEach((k) => {
@@ -43,6 +51,16 @@ const clean = (obj) => {
   return out;
 };
 const listOf = (v) => (v === undefined ? undefined : [v]);
+
+// A switch set from the Integrations page ("true") or a container file (true).
+const isOn = (v) => v === true || v === 'true';
+
+// The platform's name for a GA4 event in `map`, or undefined. Only a name the
+// map itself holds counts: an event called "constructor" has none.
+const mapped = (map, name) => {
+  const v = typeof name === 'string' ? map[name] : undefined;
+  return typeof v === 'string' ? v : undefined;
+};
 
 // A setting that pairs GA4 event names with the platform's own ids, such as
 // "purchase=123, generate_lead=456", as an object.
@@ -96,7 +114,7 @@ const adConsentBlock = () => {
   for (let i = 0; i < needed.length; i++) {
     const v = state[needed[i]];
     if (v === 'denied') return 'consent:' + needed[i] + '=denied';
-    if (v === undefined && data.send_without_consent !== 'true') return 'consent:' + needed[i] + '=missing';
+    if (v === undefined && !isOn(data.send_without_consent)) return 'consent:' + needed[i] + '=missing';
   }
   return undefined;
 };
@@ -165,9 +183,15 @@ const lookupExtra = (done) => {
   const url = cfg.url + (cfg.url.indexOf('?') === -1 ? '?' : '&') + keyName + '=' + encodeUriComponent(id);
   sendHttpRequest(url, { method: 'GET', headers: headers, timeout: 2000 }).then(
     (res) => {
-      const body = res.statusCode >= 200 && res.statusCode < 300 ? JSON.parse(res.body) : undefined;
+      // Only a good answer is kept: one failure doesn't turn the lookup
+      // off for this visitor for the next five minutes.
+      const ok = res.statusCode >= 200 && res.statusCode < 300;
+      let body;
+      if (ok) {
+        try { body = JSON.parse(res.body); } catch (e) { body = undefined; }
+      }
       const v = body && typeof body === 'object' ? body : {};
-      templateDataStorage.setItemCopy(cacheKey, { t: now, v: v });
+      if (ok && body && typeof body === 'object') templateDataStorage.setItemCopy(cacheKey, { t: now, v: v });
       done(v);
     },
     () => done({})

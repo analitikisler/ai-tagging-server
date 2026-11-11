@@ -18,7 +18,7 @@ if (missing(['ad_account_id', 'access_token'])) {
 }
 
 const eventName = getEventData('event_name');
-const pinName = NAMES[eventName];
+const pinName = mapped(NAMES, eventName);
 if (!pinName) {
   skip('unmapped_event');
   return;
@@ -62,7 +62,8 @@ fetchExtra((x) => {
         user_data: clean({
           client_ip_address: getEventData('ip_override'),
           client_user_agent: getEventData('user_agent'),
-          click_id: queryParam('epik'),
+          // From the landing page, or the cookie Pinterest's tag kept it in.
+          click_id: queryParam('epik') || getCookieValues('_epik')[0],
           external_id: listOf(hash(x.external_id || getEventData('user_id'))),
           em: listOf(hash(x.email)),
           ph: listOf(hashPhone(x.phone)),
@@ -79,7 +80,7 @@ fetchExtra((x) => {
   };
   const url =
     'https://api.pinterest.com/v5/ad_accounts/' + encodeUriComponent(data.ad_account_id) + '/events' +
-    (data.test_mode === 'true' ? '?test=true' : '');
+    (isOn(data.test_mode) ? '?test=true' : '');
   sendHttpRequest(
     url,
     { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + data.access_token } },

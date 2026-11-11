@@ -22,7 +22,7 @@ if (missing(['pixel_id', 'access_token'])) {
 }
 
 const eventName = getEventData('event_name');
-const metaName = NAMES[eventName];
+const metaName = mapped(NAMES, eventName);
 if (!metaName) {
   skip('unmapped_event');
   return;

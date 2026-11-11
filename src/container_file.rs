@@ -371,13 +371,11 @@ impl ContainerFile {
             return Ok(applied);
         }
 
-        // A temporary file in the same directory, renamed over the old one, so
-        // a crash never leaves half a file for the other instances to read.
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, &applied.after)
-            .map_err(|e| EditError::Io(format!("{}: {e}", tmp.display())))?;
-        std::fs::rename(&tmp, path)
-            .map_err(|e| EditError::Io(format!("{}: {e}", path.display())))?;
+        // A temporary file of its own in the same directory, renamed over
+        // the old one: a crash never leaves half a file for the other
+        // instances to read, and two instances saving at once never write
+        // into each other's. The file keeps the permissions it had.
+        crate::store::save_keeping_permissions(path, &applied.after).map_err(EditError::Io)?;
         self.install(
             applied.container.clone(),
             modified_at(path),

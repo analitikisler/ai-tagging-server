@@ -9,8 +9,7 @@
 const BigQuery = require('BigQuery');
 const getAllEventData = require('getAllEventData');
 
-if (!data.project_id || !data.dataset_id || !data.table_id) {
-  data.gtmOnFailure();
+if (missing(['project_id', 'dataset_id', 'table_id'])) {
   return;
 }
 
@@ -29,7 +28,7 @@ if (consent.analytics_storage === 'denied') {
   skip('consent:analytics_storage=denied');
   return;
 }
-if (consent.analytics_storage === undefined && data.send_without_consent !== 'true') {
+if (consent.analytics_storage === undefined && !isOn(data.send_without_consent)) {
   skip('consent:analytics_storage=missing');
   return;
 }

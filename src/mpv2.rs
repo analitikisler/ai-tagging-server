@@ -31,8 +31,14 @@ pub fn is_mpv2(req: &IncomingRequest) -> bool {
         && parse(&req.query).iter().any(|(k, v)| k == "v" && v == "2")
 }
 
+/// Most events taken from one batch: as many as a client can run the
+/// container for. The browser sends 25 at most.
+pub const MAX_EVENTS: usize = 100;
+
 /// One event per body line (batched `POST`), or one for the query alone.
-/// Line parameters override the shared query parameters.
+/// Line parameters override the shared query parameters. Lines past
+/// `MAX_EVENTS` are dropped before anything is built from them, so a body
+/// of a million short lines costs no more than a hundred.
 pub fn extract_events(req: &IncomingRequest) -> Vec<Value> {
     let shared = parse(&req.query);
     let lines: Vec<&str> = req
@@ -40,6 +46,7 @@ pub fn extract_events(req: &IncomingRequest) -> Vec<Value> {
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
+        .take(MAX_EVENTS)
         .collect();
 
     let hits: Vec<Vec<(String, String)>> = if lines.is_empty() {
@@ -63,9 +70,11 @@ fn parse(s: &str) -> Vec<(String, String)> {
 }
 
 fn merge(shared: &[(String, String)], line: &[(String, String)]) -> Vec<(String, String)> {
+    let overridden: std::collections::HashSet<&str> =
+        line.iter().map(|(k, _)| k.as_str()).collect();
     let mut out: Vec<(String, String)> = shared
         .iter()
-        .filter(|(k, _)| !line.iter().any(|(lk, _)| lk == k))
+        .filter(|(k, _)| !overridden.contains(k.as_str()))
         .cloned()
         .collect();
     out.extend(line.iter().cloned());
@@ -418,6 +427,15 @@ mod tests {
         assert_eq!(evs[1]["engagement_time_msec"], 1200);
         let raw = evs[1][RAW_HIT_KEY].as_str().unwrap();
         assert!(raw.contains("en=user_engagement") && !raw.contains("en=page_view"));
+
+        // A body of far more lines than a batch holds yields the first
+        // MAX_EVENTS and no more.
+        let flood = req(
+            "/g/collect",
+            "v=2&tid=G-1&cid=1.2",
+            &"en=x\n".repeat(50_000),
+        );
+        assert_eq!(extract_events(&flood).len(), MAX_EVENTS);
     }
 
     #[test]

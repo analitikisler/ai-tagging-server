@@ -58,11 +58,15 @@ async fn main() {
         .unwrap_or(1);
     // A worker waits for its hit's outgoing sends, so most of its time is
     // spent idle on the network rather than on the CPU.
-    let workers: usize = env("WORKERS", cpus * 8);
+    let workers: usize = env("WORKERS", cpus * 8).max(1);
     let budget = Duration::from_millis(env("RUN_TIMEOUT_MS", 5000u64).min(30_000));
     let memory = env("JS_MEMORY_MB", 64usize).clamp(4, 512) * 1024 * 1024;
     let allow_private = env("OUTGOING_ALLOW_PRIVATE", 0u8) == 1;
-    let debug_token = secret_env("DEBUG_TOKEN").filter(|t| t.len() >= 16);
+    let debug_token = secret_env("DEBUG_TOKEN");
+    if debug_token.as_ref().is_some_and(|t| t.len() < 16) {
+        tracing::warn!("DEBUG_TOKEN is shorter than 16 characters and is ignored");
+    }
+    let debug_token = debug_token.filter(|t| t.len() >= 16);
     let proxy_secret = secret_env("PROXY_SECRET");
     if proxy_secret.as_ref().is_some_and(|s| s.len() < 16) {
         eprintln!("PROXY_SECRET must be at least 16 characters");
@@ -90,6 +94,32 @@ async fn main() {
                     "{var} can't be combined with TENANTS_FILE: each tenant carries its own settings"
                 );
                 std::process::exit(1);
+            }
+        }
+    }
+    // These set up the built-in container only. With a container file or
+    // tenants they would be ignored without a word.
+    let own_container = if tenants_file.is_some() {
+        Some("TENANTS_FILE: set it for each tenant")
+    } else if std::env::var("CONTAINER_FILE").is_ok_and(|v| !v.is_empty()) {
+        Some("CONTAINER_FILE: set it in the file, on the GA4 client or tag")
+    } else {
+        None
+    };
+    if let Some(instead) = own_container {
+        for var in [
+            "SCRIPT_IDS",
+            "MEASUREMENT_IDS",
+            "SITE_DOMAINS",
+            "ORIGIN_CHECK",
+            "STRIP_USER_DATA",
+            "KEEP_COOKIES",
+            "CLICK_ID_ALIASES",
+            "VISITOR_INFO",
+            "BOT_HANDLING",
+        ] {
+            if std::env::var(var).is_ok_and(|v| !v.is_empty()) {
+                tracing::warn!("{var} is ignored with {instead}");
             }
         }
     }
@@ -182,7 +212,10 @@ async fn main() {
                         measurement_ids,
                         site_domains,
                         origin_check,
-                        strip_user_data: env("STRIP_USER_DATA", 0u8) == 1,
+                        strip_user_data: matches!(
+                            std::env::var("STRIP_USER_DATA").as_deref().map(str::trim),
+                            Ok("1" | "true")
+                        ),
                         features,
                     });
                     ContainerFile::fixed(container, storage.clone(), stats)
@@ -227,10 +260,14 @@ async fn main() {
     );
     metrics::init();
 
-    // A dry preview of a draft sends nothing.
-    let dry: Arc<dyn sandbox::Transport> = Arc::new(replay::Dry);
+    // A dry preview of a draft sends nothing to the platforms; Google's own
+    // scripts are still fetched, or the previewing browser would get none.
+    let dry: Arc<dyn sandbox::Transport> = Arc::new(replay::DryPreview::new(transport.clone()));
+    // Only a draft's preview runs dry. Several sites have no drafts, and
+    // there the id is a site's own, which may be anything.
+    let previews = !matches!(target, Target::Multi(_));
     let pool = Pool::new(workers, workers * 128, move |t: &Resolved| {
-        let transport: Arc<dyn sandbox::Transport> = if t.id == "preview-dry" {
+        let transport: Arc<dyn sandbox::Transport> = if previews && t.id == "preview-dry" {
             dry.clone()
         } else {
             transport.clone()
@@ -274,6 +311,9 @@ async fn main() {
         eprintln!("SLACK_WEBHOOK_URL must be an https:// address");
         std::process::exit(1);
     }
+    if slack.is_some() && admin_token.is_none() {
+        tracing::warn!("SLACK_WEBHOOK_URL is set but ADMIN_TOKEN isn't; no alert checks run");
+    }
     let check_token = secret_env("CHECK_TOKEN");
     if check_token.as_ref().is_some_and(|t| t.len() < 16) {
         eprintln!("CHECK_TOKEN must be at least 16 characters");
@@ -310,7 +350,6 @@ async fn main() {
         ))
     });
     let pool = Arc::new(pool);
-    let log = Arc::new(eventlog::EventLog::default());
     let admin = admin_token.map(|token| admin::Admin {
         tenants: match &target {
             Target::Multi(t) => Some(t.clone()),
@@ -330,7 +369,6 @@ async fn main() {
         alerts: alerts.clone(),
         check_token,
         pool: pool.clone(),
-        log: log.clone(),
         drafts: match &target {
             Target::Single(f) => Some(f.clone()),
             Target::Integrated(i) => Some(i.base().clone()),
@@ -356,11 +394,6 @@ async fn main() {
             }
         });
     }
-    // Only the integrations page shows the event log.
-    let log = admin
-        .as_ref()
-        .filter(|a| a.integrations.is_some())
-        .map(|_| log);
     let app = App {
         pool,
         target: target.clone(),
@@ -368,7 +401,6 @@ async fn main() {
         debug_token: debug_token.clone(),
         proxy_secret: proxy_secret.clone(),
         counts: counts.clone(),
-        log,
     };
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

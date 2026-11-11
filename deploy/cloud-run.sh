@@ -70,6 +70,13 @@ if [ -n "$BIGQUERY_TABLE" ] && ! [[ "$BIGQUERY_TABLE" =~ ^[A-Za-z0-9_]+\.[A-Za-z
   echo "BIGQUERY_TABLE must be dataset.table" >&2
   exit 1
 fi
+# The server refuses to start without the GA4 ids to accept, so stop here
+# rather than after the build. With tenants, each tenant names its own.
+SCRIPT_ID_LIST=",${SCRIPT_IDS// /}"
+if [ -z "$TENANTS_BUCKET" ] && [ -z "${MEASUREMENT_IDS// /}" ] && [[ "$SCRIPT_ID_LIST" != *,G-* ]]; then
+  echo "set SCRIPT_IDS with a G- id (e.g. SCRIPT_IDS=GTM-XXXXXXX,G-XXXXXXX) or MEASUREMENT_IDS" >&2
+  exit 1
+fi
 case "$ORIGIN_CHECK" in
   enforce | log | off) ;;
   *) echo "ORIGIN_CHECK must be enforce, log or off" >&2; exit 1 ;;
@@ -202,5 +209,9 @@ if [ -n "$SETTINGS_BUCKET" ]; then
 fi
 if [ -n "$BIGQUERY_TABLE" ]; then
   echo
-  echo "BigQuery export: at /admin, set project $PROJECT_ID, dataset ${BIGQUERY_TABLE%%.*} and table ${BIGQUERY_TABLE#*.}."
+  if [ -n "$INTEGRATIONS_BUCKET" ]; then
+    echo "BigQuery export: at /admin, set project $PROJECT_ID, dataset ${BIGQUERY_TABLE%%.*} and table ${BIGQUERY_TABLE#*.}."
+  else
+    echo "BigQuery export: the table is ready, but the export is turned on at /admin, which needs INTEGRATIONS_BUCKET."
+  fi
 fi

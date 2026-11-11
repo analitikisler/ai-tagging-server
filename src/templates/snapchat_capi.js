@@ -16,13 +16,12 @@ const NAMES = {
   sign_up: 'SIGN_UP',
 };
 
-if (!data.pixel_id || !data.access_token) {
-  data.gtmOnFailure();
+if (missing(['pixel_id', 'access_token'])) {
   return;
 }
 
 const eventName = getEventData('event_name');
-const snapName = NAMES[eventName];
+const snapName = mapped(NAMES, eventName);
 if (!snapName) {
   skip('unmapped_event');
   return;
@@ -76,7 +75,7 @@ fetchExtra((x) => {
   };
   const url =
     'https://tr.snapchat.com/v3/' + encodeUriComponent(data.pixel_id) + '/events' +
-    (data.test_mode === 'true' ? '/validate' : '') +
+    (isOn(data.test_mode) ? '/validate' : '') +
     '?access_token=' + encodeUriComponent(data.access_token);
   sendHttpRequest(url, { method: 'POST', headers: { 'content-type': 'application/json' } }, JSON.stringify(payload)).then(
     finish,

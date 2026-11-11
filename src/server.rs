@@ -19,7 +19,7 @@ use tokio::sync::oneshot;
 
 use crate::admin::{self, Admin};
 use crate::container_file::ContainerFile;
-use crate::eventlog::{EventLog, without_queries};
+use crate::eventlog::without_queries;
 use crate::google::GoogleAuth;
 use crate::integrations::Integrations;
 use crate::metrics::METRICS;
@@ -35,7 +35,7 @@ const BIGQUERY_API: &str = "https://bigquery.googleapis.com/";
 
 type Job = (IncomingRequest, Resolved, oneshot::Sender<RunResult>);
 
-/// Runtimes a worker keeps compiled at once; the least recently built is
+/// Runtimes a worker keeps compiled at once; the least recently used is
 /// dropped past this.
 const ENGINES_PER_WORKER: usize = 16;
 
@@ -80,7 +80,12 @@ impl Pool {
                         let Ok((req, tenant, reply)) = job else { break };
                         let key = (tenant.id.clone(), tenant.generation);
                         let at = match engines.iter().position(|(k, _)| *k == key) {
-                            Some(at) => at,
+                            // Used last, so dropped last.
+                            Some(at) => {
+                                let used = engines.remove(at);
+                                engines.push(used);
+                                engines.len() - 1
+                            }
                             None => {
                                 engines.retain(|((id, _), _)| *id != tenant.id);
                                 if engines.len() >= ENGINES_PER_WORKER {
@@ -90,7 +95,26 @@ impl Pool {
                                 engines.len() - 1
                             }
                         };
-                        let _ = reply.send(engines[at].1.run(req));
+                        // A panic inside a run must not take the thread
+                        // with it: the pool would shrink for good.
+                        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            engines[at].1.run(req)
+                        }));
+                        match run {
+                            Ok(result) => {
+                                let _ = reply.send(result);
+                            }
+                            Err(_) => {
+                                tracing::error!(
+                                    "worker js-{i}: a run panicked; the hit is refused and the runtime replaced"
+                                );
+                                // The runtime stopped half-way through a run:
+                                // it is left alone rather than torn down, and
+                                // the next hit builds a new one. Dropping
+                                // `reply` answers this hit.
+                                std::mem::forget(engines.remove(at));
+                            }
+                        }
                     }
                 })
                 .expect("spawn worker");
@@ -238,8 +262,10 @@ impl HttpTransport {
             if e.is_timeout() {
                 return "timed_out".into();
             }
+            // reqwest names the whole address, and its query carries the
+            // visitor's IP and user data: keep that out of every record.
             // The resolver's refusal sits a few levels down the error chain.
-            let mut msg = e.to_string();
+            let mut msg = without_queries(&e.to_string());
             let mut source = std::error::Error::source(&e);
             while let Some(s) = source {
                 msg = format!("{msg}: {s}");
@@ -334,36 +360,63 @@ pub struct App {
     pub proxy_secret: Option<String>,
     /// Counts per quarter hour for the alerts, with the admin console on.
     pub counts: Option<Arc<crate::counts::Recorder>>,
-    /// Recent hits for the admin page, when it shows them.
-    pub log: Option<Arc<EventLog>>,
 }
 
 /// The cookie that keeps a browser on the draft while it previews.
 pub const PREVIEW_COOKIE: &str = "_sst_check";
 /// How long a preview session lasts.
-const PREVIEW_MS: u64 = 4 * 3_600_000;
+pub(crate) const PREVIEW_MS: u64 = 4 * 3_600_000;
 
 /// The preview session a request belongs to, by the code on the page's
 /// address (`sst_check=<code>` in the hit's `dl`) or the preview cookie,
 /// and whether its sends are dry. Only a live check started as a preview,
-/// and not older than 4 hours, counts.
+/// and not older than 4 hours, counts. The address comes first, so a new
+/// code isn't hidden by the cookie an earlier preview left; a code whose
+/// session is gone or too old gives way to the next one.
 fn preview_of(a: &Admin, req: &IncomingRequest) -> Option<(String, bool)> {
     let code_after = |text: &str, marker: &str| -> Option<String> {
         let at = text.find(marker)? + marker.len();
         let code: String = text[at..].chars().take(8).collect();
         (code.len() == 8 && code.chars().all(|c| c.is_ascii_hexdigit())).then_some(code)
     };
-    let code = req
-        .header("cookie")
-        .and_then(|c| code_after(c, &format!("{PREVIEW_COOKIE}=")))
-        .or_else(|| code_after(&req.query, "sst_check%3D"))
-        .or_else(|| code_after(&req.body, "sst_check%3D"))?;
-    let s = a.state.read(&format!("checkup/live-{code}.json"))?;
-    let fresh = s["since"]
-        .as_u64()
-        .is_some_and(|t| t + PREVIEW_MS > crate::state::now_ms());
-    (s["preview"] == serde_json::json!(true) && fresh)
-        .then(|| (code, s["send"] != serde_json::json!(true)))
+    let codes = [
+        code_after(&req.query, "sst_check%3D"),
+        code_after(&req.body, "sst_check%3D"),
+        req.header("cookie")
+            .and_then(|c| code_after(c, &format!("{PREVIEW_COOKIE}="))),
+    ];
+    for code in codes.into_iter().flatten() {
+        let Some(s) = a.state.read(&format!("checkup/live-{code}.json")) else {
+            continue;
+        };
+        let fresh = s["since"]
+            .as_u64()
+            .is_some_and(|t| t + PREVIEW_MS > crate::state::now_ms());
+        if !fresh {
+            continue;
+        }
+        // A live check that isn't a preview runs the live container.
+        return (s["preview"] == serde_json::json!(true))
+            .then(|| (code, s["send"] != serde_json::json!(true)));
+    }
+    None
+}
+
+/// Counts a hit as in flight until it is dropped, also when the client
+/// goes away and the handler is dropped mid-run.
+struct InFlight;
+
+impl InFlight {
+    fn start() -> Self {
+        METRICS.in_flight.fetch_add(1, Relaxed);
+        InFlight
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        METRICS.in_flight.fetch_sub(1, Relaxed);
+    }
 }
 
 pub fn router(app: App) -> Router {
@@ -460,6 +513,11 @@ async fn handle(
                 .iter()
                 .any(|(k, v)| k == "x-debug-token" && same(v.trim(), t))
         });
+    // Like the proxy's secret, the token is not for templates to read.
+    let headers: Vec<(String, String)> = headers
+        .into_iter()
+        .filter(|(k, _)| k != "x-debug-token")
+        .collect();
 
     let method = parts.method.as_str().to_string();
     let path = parts.uri.path().to_string();
@@ -491,6 +549,10 @@ async fn handle(
         };
         Some(d.resolved(c, *dry))
     });
+    // Without a draft to run (published or discarded since the preview
+    // started), this is a live hit like any other: counted, and not kept on
+    // the preview cookie.
+    let preview = preview.filter(|_| draft.is_some());
     let tenant = match &app.target {
         _ if draft.is_some() => draft.expect("draft"),
         Target::Single(f) => f.resolved(),
@@ -521,10 +583,11 @@ async fn handle(
         matches!(app.target, Target::Multi(_)).then(|| tenant.id.clone())
     };
 
-    METRICS.in_flight.fetch_add(1, Relaxed);
     let started = Instant::now();
-    let result = app.pool.run(incoming, tenant.clone()).await;
-    METRICS.in_flight.fetch_sub(1, Relaxed);
+    let result = {
+        let _in_flight = InFlight::start();
+        app.pool.run(incoming, tenant.clone()).await
+    };
     let Some(mut result) = result else {
         METRICS.rejected_busy.fetch_add(1, Relaxed);
         tracing::warn!("{method} {path} -> 503 busy");
@@ -543,9 +606,6 @@ async fn handle(
     // Preview hits stay out of the counts that alerts and checks read.
     if let Some(c) = app.counts.as_ref().filter(|_| preview.is_none()) {
         c.record(tenant_id.as_deref().unwrap_or(""), &result);
-    }
-    if let Some(log) = &app.log {
-        log.record(&path, &result, elapsed, false);
     }
     let mode = if preview.is_some() { "preview " } else { "" };
     tracing::info!("{mode}{method} {path} -> {}", summarize(&result));
@@ -576,6 +636,12 @@ async fn handle(
     let mut r = result.response;
     // Keeps the preview on for the browser's next pages, for 4 hours.
     if let Some((code, _)) = &preview {
+        // What a preview answers is the draft's, for this browser only: no
+        // cache between it and the server may keep it for other visitors.
+        r.headers
+            .retain(|(k, _)| !k.eq_ignore_ascii_case("cache-control"));
+        r.headers
+            .push(("cache-control".into(), "private, no-store".into()));
         r.headers.push((
             "set-cookie".into(),
             format!("{PREVIEW_COOKIE}={code}; Path=/; Max-Age=14400; SameSite=Lax"),
@@ -938,7 +1004,6 @@ mod tests {
         let pool = Arc::new(pool);
         let admin = Admin {
             pool: pool.clone(),
-            log: Default::default(),
             tenants: None,
             integrations: None,
             token: "t".repeat(32),
@@ -960,7 +1025,6 @@ mod tests {
         };
         let app = App {
             pool,
-            log: None,
             target: Target::Single(file),
             admin: Some(admin.clone()),
             debug_token: None,
@@ -1023,6 +1087,21 @@ mod tests {
             .unwrap();
         assert_eq!(admin.traces.details(None)[0].1["tenant"], "preview");
         assert_eq!(sent.0.lock().unwrap().len(), 1);
+        // A new link wins over the cookie an expired preview left behind.
+        state
+            .write(
+                "checkup/live-11111111.json",
+                &serde_json::json!({ "code": "11111111", "since": 1, "preview": true }),
+            )
+            .unwrap();
+        hit(
+            "https%3A%2F%2Fshop%2F%3Fsst_check%3Dab12cd34",
+            Some("_sst_check=11111111"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(admin.traces.details(None)[0].1["tenant"], "preview");
+        assert_eq!(sent.0.lock().unwrap().len(), 1);
         // An unknown code is an ordinary visitor.
         hit("https%3A%2F%2Fshop%2F", Some("_sst_check=00000000"))
             .await
@@ -1033,6 +1112,19 @@ mod tests {
         counts.flush();
         let q = crate::counts::quarter_now();
         assert_eq!(crate::counts::Reader::new(&state).quarter(q)[""].hits, 2);
+
+        // Once the draft is gone, the cookie's browser is a live visitor again.
+        admin.drafts.as_ref().unwrap().discard();
+        let r = hit("https%3A%2F%2Fshop%2Fp3", Some("_sst_check=ab12cd34"))
+            .await
+            .unwrap();
+        assert!(
+            r.headers()
+                .get("set-cookie")
+                .is_none_or(|c| { !c.to_str().unwrap().starts_with("_sst_check=") })
+        );
+        assert_eq!(sent.0.lock().unwrap().len(), 3);
+        assert!(admin.traces.details(None)[0].1["tenant"].is_null());
         std::fs::remove_dir_all(dir).ok();
     }
 }

@@ -344,10 +344,15 @@ fn step(s: &Step, e: &mut Value) {
                 (Format::Trim, Value::String(s)) => json!(s.trim()),
                 (Format::Number, Value::String(s)) => {
                     let s = s.trim();
-                    let s = if s.contains(',') && !s.contains('.') {
-                        s.replace(',', ".")
-                    } else {
-                        s.replace(',', "")
+                    let s = match (s.rfind(','), s.rfind('.')) {
+                        // Both marks: the last one is the decimal mark, so
+                        // "1.234,50" and "1,234.50" are the same number.
+                        (Some(comma), Some(dot)) if comma > dot => {
+                            s.replace('.', "").replace(',', ".")
+                        }
+                        (Some(_), Some(_)) => s.replace(',', ""),
+                        (Some(_), None) => s.replace(',', "."),
+                        _ => s.to_string(),
                     };
                     match s.parse::<f64>() {
                         Ok(n) if n.is_finite() => {
@@ -457,11 +462,13 @@ mod tests {
             { "op": "format", "key": "b", "format": "number" },
             { "op": "format", "key": "c", "format": "number" },
             { "op": "format", "key": "d", "format": "string" },
+            { "op": "format", "key": "e", "format": "number" },
+            { "op": "format", "key": "f", "format": "number" },
         ] }]));
-        let e = json!({ "a": "1,234.50", "b": "n/a", "c": "12", "d": 7 });
+        let e = json!({ "a": "1,234.50", "b": "n/a", "c": "12", "d": 7, "e": "1.234,50", "f": "49,90" });
         assert_eq!(
             *view(&r, "GA4", &e).0,
-            json!({ "a": 1234.5, "b": "n/a", "c": 12, "d": "7" })
+            json!({ "a": 1234.5, "b": "n/a", "c": 12, "d": "7", "e": 1234.5, "f": 49.9 })
         );
     }
 
