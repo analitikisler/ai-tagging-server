@@ -103,6 +103,8 @@ With `DEBUG_TOKEN` set, add `__debug` to any hit and send the token in an `x-deb
 | `AI_MODEL` | `claude-opus-5-5` | The model the AI uses. A cheaper one, such as `claude-haiku-5-5`, costs less per call and answers less carefully. |
 | `AI_DAILY_LIMIT` | `200` | Most AI calls per instance per day (UTC), so the bill can't run away. |
 | `AI_BASE_URL` | `https://api.anthropic.com` | Where AI calls go, for a gateway or proxy in front of the Anthropic API. |
+| `GOOGLE_AUTH` | `auto` | Where the Google access token for [BigQuery inserts](docs/bigquery-export.md#3-server-settings) comes from: `auto`, `key`, `metadata` or `off`. `auto` uses the key file when `GOOGLE_APPLICATION_CREDENTIALS` is set, else the metadata server on Cloud Run, else nothing. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | none | Path to a service account key file, for BigQuery inserts from a host outside Google Cloud. |
 | `DEBUG_TOKEN` | off | Enables the `__debug` report. At least 16 characters. Accepted only in the `x-debug-token` header, so it never appears in URL logs. |
 | `OUTGOING_ALLOW_PRIVATE` | `0` | `1` allows sends to private and internal addresses. Otherwise every address a name resolves to is checked when connecting, redirects aren't followed, and `HTTP_PROXY`/`HTTPS_PROXY` are ignored. |
 | `SEND_RETRIES` | `1` | Extra attempts for an outgoing send after a failed connection or a 502, 503 or 504 answer (max 5). Timeouts aren't retried, and all attempts stay within the request's time budget. |
@@ -271,7 +273,15 @@ A container file lists templates, clients and tags. Template paths are relative 
 ```json
 {
   "version": "1",
-  "templates": { "purchase_logger": "templates/purchase_logger.js" },
+  "templates": {
+    "purchase_logger": {
+      "file": "templates/purchase_logger.js",
+      "permissions": {
+        "read_event_data": { "keys": ["transaction_id", "value", "currency"] },
+        "logging": {}
+      }
+    }
+  },
   "clients": [
     { "name": "GA4", "template": "ga4_client", "data": { "extendGaCookie": true } }
   ],
@@ -290,7 +300,7 @@ A container file lists templates, clients and tags. Template paths are relative 
 
 A tag with `"enabled": false` never fires and stays in the file. Tag names are unique, at most 100 characters.
 
-A template can be a path, or `{ "file": ..., "permissions": {...} }`. A `.tpl` file exported from Google's template editor or the gallery works too: its code and its server permissions are read from the file.
+A template is `{ "file": ..., "permissions": {...} }`, or just a path when it needs no permissions (see [below](#template-permissions-and-checks)). A `.tpl` file exported from Google's template editor or the gallery works too: its code and its server permissions are read from the file.
 
 See [`examples/container.json`](examples/container.json).
 
@@ -349,9 +359,10 @@ Permissions, with the APIs they cover. Parameters are checked on every call, and
 | `set_cookies` | `names`: patterns | `setCookie` |
 | `read_request` | none | `getRequestMethod`, `getRequestPath`, `getRequestQueryString`, `getRequestQueryParameter(s)`, `getRequestHeader`, `getRequestBody`, `getRemoteAddress` |
 | `access_response` | none | `setResponseStatus`, `setResponseHeader`, `setResponseBody`, `setPixelResponse` |
+| `access_bigquery` | `tables`: `project.dataset.table` patterns | `BigQuery.insert` (see the [BigQuery guide](docs/bigquery-export.md#custom-templates)) |
 | `return_response`, `run_container`, `read_container_data`, `access_template_storage`, `logging` | none | `returnResponse`, `runContainer`, `getContainerVersion`, `templateDataStorage`, `logToConsole` |
 
-Cookie domain, path and header restrictions from a `.tpl` are not enforced beyond the names. Permissions for APIs this server doesn't have yet (BigQuery, Firestore and the like) are ignored when a `.tpl` is read.
+Cookie domain, path and header restrictions from a `.tpl` are not enforced beyond the names. Permissions for APIs this server doesn't have yet (Firestore and the like) are ignored when a `.tpl` is read.
 
 Upgrading: a custom template in a container file used to run with every API. Add its permissions as above, or the server won't load it.
 
@@ -470,6 +481,7 @@ Tags must call `data.gtmOnSuccess()` or `data.gtmOnFailure()`. A tag that decide
 | Strings, URLs, regex | `parseUrl`, `computeEffectiveTldPlusOne`, `encodeUri`, `encodeUriComponent`, `decodeUri`, `decodeUriComponent`, `createRegex`, `testRegex` |
 | Types | `getType`, `makeString`, `makeNumber`, `makeInteger`, `makeTableMap` |
 | Encoding and hashing | `toBase64`, `fromBase64`, `sha256`, `sha256Sync`, `hmacSha256` |
+| BigQuery | `BigQuery.insert` |
 | Other | `getTimestampMillis`, `getTimestamp`, `generateRandom`, `callLater`, `logToConsole`, `templateDataStorage`, `JSON`, `Math`, `Object`, `Promise` |
 
 Notes on the newer APIs:
@@ -479,13 +491,13 @@ Notes on the newer APIs:
 - `addEventCallback(callback)` is for tags. The callback runs once every tag of the event has reported, as `callback(containerId, { tags: [{ id, status, executionTime }] })`. `status` is `success`, `failure`, `exception` or `timeout` (a skipped tag reports `success`, as sGTM has no such status); `id` is the tag's name and `executionTime` is always `0`.
 - `sendMessage(type, message)` reaches every listener of that type from `addMessageListener(type, callback)`, which is called as `callback(type, message)`. Delivery is not instant: listeners run after the sending code finishes. A run delivers at most 1000 messages.
 
-Registered but not built yet (calling them throws): `sendEventToGoogleAnalytics`, `sendPixelFromBrowser`, `getGoogleScript`, `getGoogleAuth`, `BigQuery`, `Firestore`.
+Registered but not built yet (calling them throws): `sendEventToGoogleAnalytics`, `sendPixelFromBrowser`, `getGoogleScript`, `Firestore`. `getGoogleAuth` throws on purpose: the server's Google token never reaches a template, and `BigQuery.insert` adds it on the way out.
 
 Not yet: loading a container exported from Google Tag Manager.
 
 ## Deploy: Cloud Run behind Cloudflare
 
-1. `PROJECT_ID=<your project> ./deploy/cloud-run.sh` builds the image with Cloud Build and deploys it to Cloud Run in `europe-west3` (Frankfurt), scaling to zero when idle. It keeps `PROXY_SECRET` and `DEBUG_TOKEN` in Secret Manager, and runs the service as its own service account (`<service>-run`), which can read those two secrets and nothing else.
+1. `PROJECT_ID=<your project> SCRIPT_IDS=GTM-XXXXXXX,G-XXXXXXX ./deploy/cloud-run.sh` builds the image with Cloud Build and deploys it to Cloud Run in `europe-west3` (Frankfurt), scaling to zero when idle. It keeps `PROXY_SECRET` and `DEBUG_TOKEN` in Secret Manager, and runs the service as its own service account (`<service>-run`), which can read those two secrets and nothing else. `SCRIPT_IDS` are the ids whose scripts the server serves, and its `G-` ids are the GA4 properties hits are accepted for (or set `MEASUREMENT_IDS`); the script stops without either, as the server would.
 2. Put the printed service URL in [`deploy/cloudflare/wrangler.toml`](deploy/cloudflare/wrangler.toml) as `ORIGIN_URL`, run `npx wrangler deploy` there, and set the same `PROXY_SECRET` on the Worker. The Worker serves the server at `https://your-site/k7q2/*`: change `/k7q2` (the route and `PATH_PREFIX`) to a short path of your own. Ad blockers match words like `analytics`, `metrics`, `tracking`, `gtm`, `gtag` or `ad` in hostnames and paths, so a meaningless one lasts longer; the Setup check warns about such words. The Worker also passes the visitor's location from Cloudflare (`x-sst-geo-country`, `-region`, `-city`, `-postal-code`) for the GA4 client's `visitorInfo`, after dropping any a visitor sent.
    The script sets `ORIGIN_CHECK=enforce`, so hits that don't come from your site's pages get `403`. To watch first, deploy with `ORIGIN_CHECK=log` and look for `origin_check=would_reject` in the service's logs: `gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="tagging-server" AND textPayload:"origin_check=would_reject"' --project <your project> --freshness 7d --limit 50`.
 3. Optional: `INTEGRATIONS_BUCKET=<name> PROJECT_ID=... ./deploy/cloud-run.sh` also creates a Cloud Storage bucket for the integrations file and the shared state, mounts it at `/data` (`STATE_DIR=/data/state`), creates `ADMIN_TOKEN` and `CHECK_TOKEN` in Secret Manager, sets `ADMIN_URL`, creates a Cloud Scheduler job that runs the alert checks every 5 minutes, and prints the admin page address (`<service url>/admin`, opened directly, not through the Worker). Add `SLACK_WEBHOOK_URL=https://hooks.slack.com/...` to post alerts to Slack; it is kept in Secret Manager, so later deploys don't need it again. The volume, scheduler and Slack steps have not been run against a real project yet. For [multi-tenant hosting](#multi-tenant-hosting) use `TENANTS_BUCKET=<name>` instead: the bucket then holds `tenants.json` and the shared state, edited from the same admin page, and `SCRIPT_IDS`, `MEASUREMENT_IDS`, `SITE_DOMAINS` and `ORIGIN_CHECK` are set per tenant there. The two can't be combined.

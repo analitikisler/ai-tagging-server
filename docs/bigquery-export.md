@@ -79,7 +79,7 @@ A bad key file or an unknown `GOOGLE_AUTH` value stops the server at startup, wi
 
 ## 4. Turn the export on
 
-1. Open `/admin` (set `ADMIN_TOKEN` and `INTEGRATIONS_FILE` first, as described in [ad platforms](../README.md#ad-platforms-meta-tiktok-pinterest)).
+1. Open `/admin` (set `ADMIN_TOKEN` and `INTEGRATIONS_FILE` first, as described in [ad platforms](../README.md#ad-platforms-meta-tiktok-pinterest-google-ads)).
 2. In the **BigQuery export** card, enter:
    - **Project ID**: the Google Cloud project that owns the table.
    - **Dataset ID** and **Table ID**: letters, digits, `_` and `-`. A partition decorator such as `events$20261015` is accepted.

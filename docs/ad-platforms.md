@@ -2,7 +2,7 @@
 
 Four conversion tags sit next to Meta, TikTok and Pinterest on `/admin`: **Snapchat Conversions API**, **Reddit Conversions API**, **LinkedIn Conversions API** and **X Conversions API**. Each card has the same Save, on/off and "Send a test event" controls as the others, and each one saves to the integrations file, so ids and tokens change without a deploy.
 
-This guide covers, for each platform, where to find the credentials, what to enter on its card, how consent is handled and how to check that events arrive. Set `INTEGRATIONS_FILE` and `ADMIN_TOKEN` first, as described in the [README](../README.md#ad-platforms-meta-tiktok-pinterest).
+This guide covers, for each platform, where to find the credentials, what to enter on its card, how consent is handled and how to check that events arrive. Set `INTEGRATIONS_FILE` and `ADMIN_TOKEN` first, as described in the [README](../README.md#ad-platforms-meta-tiktok-pinterest-google-ads).
 
 ## Behaviour shared by all four
 
