@@ -39,34 +39,53 @@ use crate::transform::{self, Transformation};
 
 const CONSOLE: &str = include_str!("ui/console.html");
 
+/// The Çini kit (`ui/cini/`, copied unchanged from the Analitik İşler design
+/// kit; see `brand/README.md`). The console's own CSS builds on it.
+const KIT_TOKENS: &str = include_str!("ui/cini/tokens.css");
+const KIT_FONTS: &str = include_str!("ui/cini/fonts.css");
+const KIT_BASE: &str = include_str!("ui/cini/cini.css");
+const KIT_PANO: &str = include_str!("ui/cini/pano.global.js");
+
 /// Fonts and logos the console loads: name, content type, bytes.
 const ASSETS: &[(&str, &str, &[u8])] = &[
     (
         "favicon-ai-16.svg",
         "image/svg+xml",
-        include_bytes!("ui/logos/favicon-ai-16.svg"),
+        include_bytes!("ui/cini/logos/icons/favicon-ai-16.svg"),
     ),
     (
         "favicon-ai-16-ink.svg",
         "image/svg+xml",
-        include_bytes!("ui/logos/favicon-ai-16-ink.svg"),
+        include_bytes!("ui/cini/logos/icons/favicon-ai-16-ink.svg"),
     ),
     (
-        "google-sans-code.woff2",
+        "gabarito.woff2",
         "font/woff2",
-        include_bytes!("ui/fonts/google-sans-code.woff2"),
+        include_bytes!("ui/cini/fonts/gabarito.woff2"),
     ),
     (
-        "google-sans-flex-display.woff2",
+        "azeret-mono.woff2",
         "font/woff2",
-        include_bytes!("ui/fonts/google-sans-flex-display.woff2"),
-    ),
-    (
-        "google-sans-text.woff2",
-        "font/woff2",
-        include_bytes!("ui/fonts/google-sans-text.woff2"),
+        include_bytes!("ui/cini/fonts/azeret-mono.woff2"),
     ),
 ];
+
+/// The kit's stylesheets and the Pano script, inlined where the console marks
+/// them, so the page stays one response under its CSP. The kit's base and
+/// controls go in the lowest cascade layer, under the console's own layers,
+/// as `cini.css` asks of a tool that has layers. Its font files are served
+/// from `/admin/assets/` like any other asset.
+fn with_kit(html: &str) -> String {
+    let css = format!(
+        "<style>\n{KIT_TOKENS}\n{fonts}\n@layer kit {{\n{KIT_BASE}\n}}\n</style>",
+        fonts = KIT_FONTS.replace("url(\"./fonts/", "url(\"/admin/assets/"),
+    );
+    html.replacen("<!-- cini:css -->", &css, 1).replacen(
+        "<!-- cini:pano -->",
+        &format!("<script>\n{KIT_PANO}\n</script>"),
+        1,
+    )
+}
 
 #[derive(Clone)]
 pub struct Admin {
@@ -216,7 +235,7 @@ async fn gate(
 static VERSIONED_CONSOLE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     ASSETS
         .iter()
-        .fold(CONSOLE.to_string(), |html, (name, _, bytes)| {
+        .fold(with_kit(CONSOLE), |html, (name, _, bytes)| {
             let v: String = sha2::Sha256::digest(bytes)
                 .iter()
                 .take(4)
@@ -2201,6 +2220,72 @@ mod tests {
     const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
     #[test]
+    fn the_console_carries_the_kit() {
+        let html = VERSIONED_CONSOLE.as_str();
+        assert!(!html.contains("<!-- cini:"), "a kit marker was left in");
+        assert!(
+            html.contains("--color-bg: #faf5f0;"),
+            "tokens.css isn't inlined"
+        );
+        assert!(html.contains("@layer kit {"), "cini.css isn't layered");
+        assert!(html.contains("window.Pano") && html.contains("Pano ="));
+        assert!(html.contains("url(\"/admin/assets/gabarito.woff2?v="));
+        assert!(!html.contains("./fonts/"));
+        // The retired face, spelled so a repo-wide grep for it stays clean.
+        assert!(!html.to_lowercase().contains(concat!("google", " ", "sans")));
+    }
+
+    /// The console's own CSS paints with the kit's roles only.
+    #[test]
+    fn the_console_css_has_no_hex_colours() {
+        let css = CONSOLE
+            .split("<style>")
+            .nth(1)
+            .and_then(|s| s.split("</style>").next())
+            .expect("the console's style block");
+        let hex = css.match_indices('#').find(|(i, _)| {
+            css[i + 1..]
+                .chars()
+                .take_while(|c| c.is_ascii_hexdigit())
+                .count()
+                >= 3
+        });
+        assert!(hex.is_none(), "hex value in the console CSS: {hex:?}");
+    }
+
+    /// The logos drawn from the symbols at the top of the console are the
+    /// kit's ai tagging server lockup and master logo, path for path.
+    #[test]
+    fn the_console_logos_are_the_kits() {
+        fn paths(svg: &str) -> Vec<&str> {
+            svg.split(" d=\"")
+                .skip(1)
+                .map(|s| s.split('"').next().unwrap_or(""))
+                .collect()
+        }
+        let sprite = CONSOLE
+            .split("<symbol id=\"ai-lockup\"")
+            .nth(1)
+            .and_then(|s| s.split("</svg>").next())
+            .expect("the logo symbols");
+        let (lockup, master) = sprite
+            .split_once("<symbol id=\"ai-master\"")
+            .expect("the master logo symbol");
+        assert_eq!(
+            paths(lockup),
+            paths(include_str!(
+                "ui/cini/logos/lockups/ai-tagging-server-light.svg"
+            ))
+        );
+        assert_eq!(
+            paths(master),
+            paths(include_str!(
+                "ui/cini/logos/master/analitik-isler-light.svg"
+            ))
+        );
+    }
+
+    #[test]
     fn the_console_links_assets_by_content() {
         let html = VERSIONED_CONSOLE.as_str();
         for (name, _, _) in ASSETS {
@@ -2361,7 +2446,7 @@ mod tests {
             let csp = page.headers()["content-security-policy"].to_str().unwrap();
             assert!(csp.contains("font-src 'self'"), "{csp}");
             let font = http
-                .get(format!("{base}/admin/assets/google-sans-text.woff2"))
+                .get(format!("{base}/admin/assets/gabarito.woff2"))
                 .send()
                 .await
                 .unwrap();

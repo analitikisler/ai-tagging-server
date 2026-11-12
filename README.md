@@ -1,7 +1,7 @@
 <h1>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="brand/assets/lockups/ai-tagging-server-dark.svg">
-    <img alt="ai tagging server" src="brand/assets/lockups/ai-tagging-server-light.svg" height="44">
+    <source media="(prefers-color-scheme: dark)" srcset="src/ui/cini/logos/lockups/ai-tagging-server-dark.svg">
+    <img alt="ai tagging server" src="src/ui/cini/logos/lockups/ai-tagging-server-light.svg" height="44">
   </picture>
 </h1>
 
@@ -532,11 +532,11 @@ cargo fmt --check
 ## About
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="brand/assets/master/analitik-isler-dark.svg">
-  <img alt="Analitik İşler" src="brand/assets/master/analitik-isler-light.svg" height="22">
+  <source media="(prefers-color-scheme: dark)" srcset="src/ui/cini/logos/master/analitik-isler-dark.svg">
+  <img alt="Analitik İşler" src="src/ui/cini/logos/master/analitik-isler-light.svg" height="22">
 </picture>
 
-ai tagging server is made by Analitik İşler, one of its ai tools. “ai” stands for two things: AI, and the initials of analitik işler. The logos and colours are in [`brand/`](brand/BRAND.md).
+ai tagging server is made by Analitik İşler, one of its ai tools. “ai” stands for two things: AI, and the initials of analitik işler. The logos and colours come from the Analitik İşler family guide and its Çini kit: see [`brand/`](brand/README.md).
 
 ## License
 

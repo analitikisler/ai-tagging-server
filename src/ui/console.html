@@ -8,147 +8,25 @@
 <title>ai tagging server</title>
 <link rel="icon" href="/admin/assets/favicon-ai-16.svg" type="image/svg+xml" media="(prefers-color-scheme: light)">
 <link rel="icon" href="/admin/assets/favicon-ai-16-ink.svg" type="image/svg+xml" media="(prefers-color-scheme: dark)">
+<!-- cini:css -->
 <style>
-/* ai tagging server console · CSS foundation (Art Director, 23 Oct 2026)
-   Built on the Analitik İşler design system (direction D): tokens copied exactly from tokens.css, components derived
-   from components/bundle.css and resized for a dense console. Paint only with color-* roles below the token block.
-   Theme: dark is the default. No data-theme + system light = light. data-theme="dark|light" always wins.
+/* ai tagging server console: the console's own CSS, on top of the Çini · Mercan kit.
+   The kit (src/ui/cini: tokens.css, fonts.css, cini.css) is inlined above by the server, cini.css in the lowest
+   layer, "kit". Everything here paints with the kit's roles (--color-*, --font-*, --space-*): no hex values.
+   Theme: dark is the default. data-theme="dark|light" always wins; with none the OS decides (the kit's rule).
    Breakpoints: 768 (single pane below), 1024 (stacked panes below, rail becomes a sheet). */
 
-@layer tokens, base, layout, components, utilities;
+@layer kit, tokens, base, layout, components, utilities;
 
-/* ===== 1. Fonts (served by the binary) ===== */
-@font-face { font-family: "Google Sans Flex"; src: url("/admin/assets/google-sans-flex-display.woff2") format("woff2"); font-weight: 540 600; font-style: normal; font-display: swap; }
-@font-face { font-family: "Google Sans"; src: url("/admin/assets/google-sans-text.woff2") format("woff2"); font-weight: 400 600; font-style: normal; font-display: swap; }
-@font-face { font-family: "Google Sans Code"; src: url("/admin/assets/google-sans-code.woff2") format("woff2"); font-weight: 400 600; font-style: normal; font-display: swap; }
-
-/* ===== 2. Design tokens (exact copy of tokens.css; the only place ref-* and hex appear) ===== */
+/* ===== 1-2. Console tokens: sizes for a dense tool. Colour, type, space, radius and motion are the kit's. ===== */
 @layer tokens {
-  :root, [data-theme="dark"] {
-    --ref-white: #ffffff;
-    --ref-navy-16: #040e1f; --ref-navy-20: #071529; --ref-navy-23: #0e1e34; --ref-navy-25: #142338; --ref-navy-27: #15263f;
-    --ref-navy-33: #22354e; --ref-navy-43: #3a5170; --ref-navy-50: #566479; --ref-navy-56: #607695; --ref-navy-62: #78869a;
-    --ref-navy-76: #a2b1c6; --ref-navy-80: #b3c0d2; --ref-navy-90: #d5dde8; --ref-navy-93: #e1e8f3; --ref-navy-95: #e9eef5;
-    --ref-navy-96: #ecf1f8; --ref-navy-97: #f4f6fa; --ref-navy-99: #f9fbff;
-    --ref-blue-32: #0c325b; --ref-blue-37: #123f6f; --ref-blue-42: #0e4896; --ref-blue-46: #0f56a8; --ref-blue-48: #1259b1;
-    --ref-blue-50: #1161bb; --ref-blue-75: #69b1ff; --ref-blue-81: #8bc8ff; --ref-blue-89: #c6defc; --ref-blue-94: #deedff;
-    --ref-orange-54: #b14c00; --ref-orange-63: #d46700; --ref-orange-75: #fa8c31;
-    --ref-green-50: #197746; --ref-green-77: #5ad093; --ref-yellow-53: #8b6200; --ref-yellow-87: #f4cf5a;
-    --ref-red-53: #c12d30; --ref-red-71: #fa6b6d;
-    --color-bg: var(--ref-navy-20);
-    --color-well: var(--ref-navy-16);
-    --color-surface: var(--ref-navy-23);
-    --color-surface-2: var(--ref-navy-27);
-    --color-text: var(--ref-navy-93);
-    --color-text-strong: var(--ref-navy-99);
-    --color-muted: var(--ref-navy-76);
-    --color-border: var(--ref-navy-33);
-    --color-border-strong: var(--ref-navy-56);
-    --color-accent: var(--ref-blue-75);
-    --color-accent-ink: var(--ref-blue-81);
-    --color-accent-soft: var(--ref-blue-32);
-    --color-action: var(--ref-blue-75);
-    --color-action-hover: var(--ref-blue-81);
-    --color-on-action: var(--ref-navy-20);
-    --color-focus: var(--color-accent);
-    --color-selection: var(--ref-blue-37);
-    --color-mark: var(--ref-orange-75);
-    --color-mark-ink: var(--ref-orange-75);
-    --ai-point: #FA6B6D; /* brand/BRAND.md §4: the point, dark */
-    --color-ok: var(--ref-green-77);
-    --color-warn: var(--ref-yellow-87);
-    --color-bad: var(--ref-red-71);
-    --color-info: var(--color-accent);
-    --color-ph: var(--ref-navy-43);
-    --color-ph-ink: var(--ref-navy-99);
-    --color-code-bg: var(--color-well);
-    --color-code-text: var(--color-text);
-    --color-code-keyword: var(--color-accent);
-    --color-code-string: var(--color-ok);
-    --color-code-comment: var(--color-muted);
-    --color-overlay: rgba(2, 8, 18, 0.72);
-    --shadow-overlay: 0 16px 48px rgba(2, 8, 18, 0.55);
-    --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --font-grade: -25; color-scheme: dark;
-  }
-  [data-theme="light"] {
-    --color-bg: var(--ref-navy-97);
-    --color-well: var(--ref-navy-95);
-    --color-surface: var(--ref-white);
-    --color-surface-2: var(--ref-navy-96);
-    --color-text: var(--ref-navy-25);
-    --color-text-strong: var(--ref-navy-20);
-    --color-muted: var(--ref-navy-50);
-    --color-border: var(--ref-navy-90);
-    --color-border-strong: var(--ref-navy-62);
-    --color-accent: var(--ref-blue-50);
-    --color-accent-ink: var(--ref-blue-46);
-    --color-accent-soft: var(--ref-blue-94);
-    --color-action: var(--ref-blue-48);
-    --color-action-hover: var(--ref-blue-42);
-    --color-on-action: var(--ref-white);
-    --color-focus: var(--color-accent);
-    --color-selection: var(--ref-blue-89);
-    --color-mark: var(--ref-orange-63);
-    --color-mark-ink: var(--ref-orange-54);
-    --ai-point: #C12D30; /* brand/BRAND.md §4: the point, light */
-    --color-ok: var(--ref-green-50);
-    --color-warn: var(--ref-yellow-53);
-    --color-bad: var(--ref-red-53);
-    --color-info: var(--color-accent);
-    --color-ph: var(--ref-navy-80);
-    --color-ph-ink: var(--ref-navy-20);
-    --color-code-bg: var(--color-well);
-    --color-code-text: var(--color-text);
-    --color-code-keyword: var(--color-accent);
-    --color-code-string: var(--color-ok);
-    --color-code-comment: var(--color-muted);
-    --color-overlay: rgba(7, 21, 41, 0.48);
-    --shadow-overlay: 0 16px 48px rgba(7, 21, 41, 0.14);
-    --shadow-raised: 0 1px 2px rgba(7, 21, 41, 0.08);
-    --font-grade: 0; color-scheme: light;
-  }
-  /* System light, no saved choice: the same light roles (keep in sync with the block above). */
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme]) {
-      --color-bg: var(--ref-navy-97); --color-well: var(--ref-navy-95); --color-surface: var(--ref-white); --color-surface-2: var(--ref-navy-96);
-      --color-text: var(--ref-navy-25); --color-text-strong: var(--ref-navy-20); --color-muted: var(--ref-navy-50);
-      --color-border: var(--ref-navy-90); --color-border-strong: var(--ref-navy-62);
-      --color-accent: var(--ref-blue-50); --color-accent-ink: var(--ref-blue-46); --color-accent-soft: var(--ref-blue-94);
-      --color-action: var(--ref-blue-48); --color-action-hover: var(--ref-blue-42); --color-on-action: var(--ref-white);
-      --color-focus: var(--color-accent); --color-selection: var(--ref-blue-89);
-      --color-mark: var(--ref-orange-63); --color-mark-ink: var(--ref-orange-54);
-      --ai-point: #C12D30;
-      --color-ok: var(--ref-green-50); --color-warn: var(--ref-yellow-53); --color-bad: var(--ref-red-53); --color-info: var(--color-accent);
-      --color-ph: var(--ref-navy-80); --color-ph-ink: var(--ref-navy-20);
-      --color-code-bg: var(--color-well); --color-code-text: var(--color-text); --color-code-keyword: var(--color-accent);
-      --color-code-string: var(--color-ok); --color-code-comment: var(--color-muted);
-      --color-overlay: rgba(7, 21, 41, 0.48); --shadow-overlay: 0 16px 48px rgba(7, 21, 41, 0.14); --shadow-raised: 0 1px 2px rgba(7, 21, 41, 0.08);
-      --font-grade: 0; color-scheme: light;
-    }
-  }
   :root {
-    --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.25rem; --space-6: 1.5rem;
-    --space-7: 2rem; --space-8: 2.5rem; --space-9: 3rem; --space-10: 4rem; --space-11: 5.5rem; --space-12: 6.5rem;
-    --radius-cell: 1px; --radius-sm: 2px; --radius-md: 4px; --radius-lg: 6px; --radius-pill: 6px;
-    --font-weight-regular: 400; --font-weight-medium: 500; --font-weight-bold: 600; --font-weight-display: 570; --font-weight-display-strong: 590;
-    --text-leading-flat: 0.96; --text-leading-tight: 1.04; --text-leading-snug: 1.22; --text-leading-normal: 1.6; --text-leading-lead: 1.5; --text-leading-loose: 1.75;
-    --text-tracking-caps: 0.02em; --text-tracking-display: -0.012em; --text-tracking-section: -0.006em; --text-tracking-title: -0.012em; --text-tracking-figure: -0.02em;
-    --border-width-hair: 1px; --border-width-thin: 2px; --border-width-thick: 3px;
-    --text-measure: 66ch; --layout-wrap: 78rem; --layout-wrap-narrow: 48rem; --layout-header-h: 3.75rem; --layout-header-h-wide: 4.5rem;
-    --layout-z-header: 20; --layout-z-consent: 40; --layout-z-overlay: 50;
-    --font-display: "Google Sans Flex", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    --font-body: "Google Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    --font-mono: "Google Sans Code", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
-
-    /* Motion (bundle.css values) */
-    --motion-fast: 160ms; --motion-base: 220ms; --motion-slow: 400ms; --motion-stagger: 70ms;
-    --motion-ease-out: cubic-bezier(0.2, 0, 0, 1); --motion-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --layout-z-header: 20; --layout-z-overlay: 50;
 
     /* Console type scale: fixed sizes, dense (no fluid steps in a tool). Nothing under 12 px. */
     --c-text-xs: 0.75rem;     /* 12: mono meta, tags, statuses, table heads, counts */
     --c-text-sm: 0.8125rem;   /* 13: table cells, code, list rows, kv values */
-    --c-text-md: 0.875rem;    /* 14: body, controls, nav (= type style `label`) */
+    --c-text-md: 0.875rem;    /* 14: body, controls, nav */
     --c-text-lg: 1rem;        /* 16: pane and panel titles */
     --c-text-xl: 1.3125rem;   /* 21: view title (display face) */
     --c-text-figure: 1.5rem;  /* 24: metric values */
@@ -173,7 +51,7 @@
   body {
     margin: 0; min-height: 100vh; min-height: 100dvh; background: var(--color-bg); color: var(--color-text);
     font-family: var(--font-body); font-size: var(--c-text-md); font-weight: var(--font-weight-regular); line-height: var(--text-leading-lead);
-    font-variation-settings: "GRAD" var(--font-grade); font-synthesis: none; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    font-synthesis: none; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
   }
   h1, h2, h3, h4, h5, h6, p, figure, blockquote, dl, dd, pre { margin: 0; }
   h1, h2, h3, h4, h5, h6 { color: var(--color-text-strong); font-size: inherit; font-weight: var(--font-weight-bold); line-height: var(--text-leading-snug); overflow-wrap: anywhere; text-wrap: balance; }
@@ -186,6 +64,10 @@
   code, kbd, samp { font-size: 0.9375em; }
   svg { flex: none; }
   img { display: block; max-width: 100%; }
+  svg { height: revert-layer; }
+  /* The kit's base boxes pre and inline code; the console boxes them itself (.codeblock, .loglines). */
+  pre { padding: 0; background: none; border: 0; border-radius: 0; line-height: inherit; }
+  :not(pre) > code { padding: 0; background: none; border-radius: 0; color: inherit; }
   button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
   button { cursor: pointer; }
   table { border-collapse: collapse; }
@@ -217,7 +99,7 @@
   .rail__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: var(--c-topbar-h); padding: 0 var(--space-2) 0 var(--space-4); border-bottom: var(--border-width-hair) solid var(--color-border); }
   .rail__nav { flex: 1; overflow-y: auto; padding: var(--space-3) var(--space-2); }
   .rail__group + .rail__group { margin-top: var(--space-4); }
-  .rail__label { padding: 0 var(--space-3) var(--space-1); color: var(--color-muted); font: var(--font-weight-medium) var(--c-text-xs) / 1.3 var(--font-mono); }
+  .rail__label { padding: 0 var(--space-3) var(--space-1); color: var(--color-muted); font: var(--font-weight-medium) var(--c-text-xs) / 1.3 var(--font-body); }
   .rail__foot { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3) var(--space-4); border-top: var(--border-width-hair) solid var(--color-border);
     color: var(--color-muted); font: var(--c-text-xs) / 1.5 var(--font-mono); }
   .rail__close { display: none; }
@@ -238,8 +120,9 @@
   .topbar__end { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; flex: none; }
   .topbar__menu, .topbar__lockup { display: none; }
 
-  /* Logos (brand/BRAND.md): the ink takes the text colour, the point stays red. */
-  .brand-logo { display: block; width: auto; color: var(--color-text-strong); }
+  /* Logos (the kit's lockup and master logo, see brand/README.md): ink in the ink role, the point in the brand red,
+     the same colours as the kit's light and dark files. */
+  .brand-logo { display: block; width: auto; height: auto; color: var(--color-action); }
   .lockup { display: inline-flex; flex: none; align-items: center; line-height: 0; text-decoration: none; }
   .lockup .brand-logo { height: var(--c-lockup-h); }
   .rail__byline .brand-logo { display: inline-block; height: 0.95em; vertical-align: -0.12em; }
@@ -264,7 +147,7 @@
 
   .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
   .toolbar > .grow { flex: 1 1 10rem; min-width: 0; }
-  .stack { display: flex; flex-direction: column; gap: var(--space-3); }
+  .vstack { display: flex; flex-direction: column; gap: var(--space-3); }
   .cluster { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
   .grid-2 { display: grid; gap: var(--space-4); }
   @media (min-width: 1280px) { .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -305,7 +188,7 @@
 @layer components {
   /* --- Type helpers --- */
   .view-title { color: var(--color-text-strong); font: var(--font-weight-display) var(--c-text-xl) / 1.1 var(--font-display); letter-spacing: var(--text-tracking-title); }
-  .section-label { color: var(--color-muted); font: var(--font-weight-medium) var(--c-text-xs) / 1.3 var(--font-mono); }
+  .section-label { color: var(--color-muted); font: var(--font-weight-medium) var(--c-text-xs) / 1.3 var(--font-body); }
   .meta { color: var(--color-muted); font: var(--c-text-xs) / 1.5 var(--font-mono); font-variant-numeric: tabular-nums; }
   .note { max-width: var(--text-measure); color: var(--color-muted); font-size: var(--c-text-sm); line-height: var(--text-leading-lead); }
 
@@ -320,9 +203,11 @@
   .status .icon { width: 11px; height: 11px; }
   .status[data-tone="ok"] { color: var(--color-ok); }
   .status[data-tone="warn"] { color: var(--color-warn); }
-  .status:is([data-tone="bad"], [data-tone="risk"]) { color: var(--color-bad); }
+  .status[data-tone="bad"] { color: var(--color-bad); }
+  .status[data-tone="risk"] { color: var(--color-risk); }
   .status[data-tone="info"] { color: var(--color-info); }
-  .status[data-tone="muted"] { color: var(--color-muted); }
+  .status:is([data-tone="muted"], [data-tone="neutral"]) { color: var(--color-muted); }
+  .status[data-tone]::before { content: none; }
   .status-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-3); }
   .test-box { margin-top: var(--space-3); padding-top: var(--space-3); border-top: var(--border-width-hair) solid var(--color-border); }
   .test-box pre { margin: var(--space-1) 0 0; white-space: pre-wrap; word-break: break-all; }
@@ -378,7 +263,7 @@
 
   /* --- Copy button --- */
   .copy-button { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; padding: 0 7px; border: var(--border-width-hair) solid var(--color-border-strong); border-radius: var(--radius-sm);
-    background: transparent; color: var(--color-text); font: var(--font-weight-medium) var(--c-text-xs) / 1 var(--font-mono); white-space: nowrap;
+    background: transparent; color: var(--color-text); font: var(--font-weight-medium) var(--c-text-xs) / 1 var(--font-body); white-space: nowrap;
     transition: border-color var(--motion-fast) var(--motion-ease-out), background-color var(--motion-fast) var(--motion-ease-out); }
   .copy-button:hover { border-color: var(--color-text-strong); background: var(--color-surface-2); }
   .copy-button .icon { width: 12px; height: 12px; }
@@ -389,11 +274,11 @@
   .field__label { color: var(--color-text-strong); font-size: var(--c-text-sm); font-weight: var(--font-weight-medium); }
   .field__hint { color: var(--color-muted); font-size: var(--c-text-xs); line-height: 1.4; }
   .input, .select, .textarea { width: 100%; min-width: 0; min-height: var(--c-control-h); padding: 0 10px; background: var(--color-bg); color: var(--color-text-strong);
-    border: var(--border-width-hair) solid var(--color-border-strong); border-radius: var(--radius-md); font-size: var(--c-text-md); line-height: 1.3;
+    border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-lg); font-size: var(--c-text-md); line-height: 1.3;
     transition: border-color var(--motion-fast) var(--motion-ease-out); }
   .select[data-inline] { width: auto; max-width: 14rem; }
   .input:hover, .select:hover, .textarea:hover { border-color: var(--color-text); }
-  .input:focus-visible, .select:focus-visible, .textarea:focus-visible { outline-offset: 1px; border-color: var(--color-accent); }
+  .input:focus-visible, .select:focus-visible, .textarea:focus-visible { outline-offset: 1px; border-color: var(--color-text-strong); }
   .input::placeholder, .textarea::placeholder { color: var(--color-muted); opacity: 1; }
   .input[data-mono], .textarea { font-family: var(--font-mono); font-size: var(--c-text-sm); font-variation-settings: normal; }
   .textarea { min-height: 7rem; padding: 8px 10px; line-height: var(--text-leading-lead); resize: vertical; }
@@ -409,9 +294,9 @@
   .check > input { width: 16px; height: 16px; margin: 0; accent-color: var(--color-action); }
 
   /* --- Switch (role=switch), DS size --- */
-  .switch { position: relative; flex: none; width: 40px; height: 22px; padding: 0; border: var(--border-width-hair) solid var(--color-border-strong); border-radius: var(--radius-sm);
-    background: var(--color-bg); transition: background-color var(--motion-fast) var(--motion-ease-out), border-color var(--motion-fast) var(--motion-ease-out); }
-  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: var(--radius-cell); background: var(--color-muted);
+  .switch { position: relative; flex: none; width: 40px; height: 22px; padding: 0; border: 1.5px solid var(--color-border-strong); border-radius: 11px;
+    background: var(--color-surface-2); transition: background-color var(--motion-fast) var(--motion-ease-out), border-color var(--motion-fast) var(--motion-ease-out); }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: var(--color-text-strong);
     transition: transform var(--motion-fast) var(--motion-ease-out), background-color var(--motion-fast) var(--motion-ease-out); }
   .switch[aria-checked="true"] { background: var(--color-action); border-color: var(--color-action); }
   .switch[aria-checked="true"]::after { transform: translateX(18px); background: var(--color-on-action); }
@@ -425,7 +310,7 @@
   .tabs { min-width: 0; }
   .tabs__list { display: flex; overflow-x: auto; border-bottom: var(--border-width-hair) solid var(--color-border); scrollbar-width: none; }
   .tabs__tab { display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 36px; padding: 0 12px; border: 0; border-bottom: var(--border-width-thin) solid transparent; margin-bottom: -1px;
-    background: none; color: var(--color-muted); font: var(--font-weight-medium) var(--c-text-sm) / 1 var(--font-mono); white-space: nowrap; }
+    background: none; color: var(--color-muted); font: var(--font-weight-medium) var(--c-text-sm) / 1 var(--font-body); white-space: nowrap; }
   .tabs__tab:hover { color: var(--color-text-strong); }
   .tabs__tab[aria-selected="true"] { color: var(--color-text-strong); border-bottom-color: var(--color-accent); }
   .tabs__tab:focus-visible { outline-offset: -2px; }
@@ -442,7 +327,7 @@
   .table table { width: 100%; font-size: var(--c-text-sm); line-height: 1.4; }
   .table :is(th, td) { padding: var(--c-row-pad) var(--space-3); border-bottom: var(--border-width-hair) solid var(--color-border); text-align: left; vertical-align: top; }
   .table thead th { position: sticky; top: 0; z-index: 1; background: var(--table-ground); color: var(--color-muted); border-bottom: 0;
-    box-shadow: inset 0 calc(-1 * var(--border-width-hair)) 0 var(--color-border-strong); font: var(--font-weight-medium) var(--c-text-xs) / 1.3 var(--font-mono); white-space: nowrap; }
+    box-shadow: inset 0 calc(-1 * var(--border-width-hair)) 0 var(--color-border-strong); font: var(--font-weight-medium) var(--c-text-xs) / 1.3 var(--font-body); white-space: nowrap; }
   .table tbody th { color: var(--color-text-strong); font-weight: var(--font-weight-bold); }
   .table :is(th, td)[data-num] { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .table td[data-mono] { font-family: var(--font-mono); overflow-wrap: anywhere; }
@@ -486,7 +371,7 @@
   /* --- Key-value list --- */
   .kv { display: grid; grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr); font-size: var(--c-text-sm); }
   .kv > dt, .kv > dd { padding: 5px 0; border-bottom: var(--border-width-hair) solid var(--color-border); }
-  .kv > dt { padding-right: var(--space-4); color: var(--color-muted); font: var(--c-text-xs) / 1.7 var(--font-mono); overflow-wrap: anywhere; }
+  .kv > dt { padding-right: var(--space-4); color: var(--color-muted); font: var(--c-text-xs) / 1.7 var(--font-body); overflow-wrap: anywhere; }
   .kv > dd { min-width: 0; color: var(--color-text-strong); font-family: var(--font-mono); overflow-wrap: anywhere; }
   .kv > dd[data-redacted] { color: var(--color-muted); }
   .kv > dd > .copy-button { margin-left: var(--space-2); vertical-align: 1px; }
@@ -516,7 +401,7 @@
   .ai-box__head .icon { color: var(--color-accent); }
   .ai-list { display: flex; flex-direction: column; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
   .ai-list > li { display: flex; gap: var(--space-2); align-items: flex-start; }
-  .ai-list > li > .stack { min-width: 0; }
+  .ai-list > li > .vstack { min-width: 0; }
 
   /* --- Callout: the one note per screen (per-instance buffer, privacy) --- */
   .callout { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) var(--space-4); background: var(--color-surface);
@@ -542,20 +427,20 @@
   .ctally__label { color: var(--color-muted); font-size: var(--c-text-xs); }
   .ctally__cells { display: inline-grid; grid-auto-flow: column; grid-template-rows: 10px 10px; gap: 2px; }
   .ctally__cells > i { width: 10px; height: 10px; border: var(--border-width-hair) solid var(--color-border-strong); border-radius: var(--radius-cell); }
-  .ctally__cells > i[data-cell="sent"] { background: var(--color-accent); border-color: var(--color-accent); }
-  .ctally__cells > i[data-cell="missing"] { border-style: dashed; border-color: var(--color-bad); }
-  .ctally__cells > i[data-cell="extra"] { background: var(--color-bad); border-color: var(--color-bad); }
+  .ctally__cells > i[data-cell="sent"] { background: var(--color-data-measured); border-color: var(--color-data-measured); }
+  .ctally__cells > i[data-cell="missing"] { border-style: dashed; border-color: var(--color-data-broken); }
+  .ctally__cells > i[data-cell="extra"] { background: var(--color-data-broken); border-color: var(--color-data-broken); }
   .ctally__cells > i[data-cell="gap"] { border-color: transparent; }
   .ctally__sum { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--space-3); min-width: 0; }
   .ctally__count { color: var(--color-text-strong); font: var(--font-weight-medium) var(--c-text-sm) / 1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .ctally__delta { font-family: var(--font-body); }
-  /* Over ~40 units: bars (outline = expected, blue = done, red hatch = the gap); --v is the done share 0–1 */
+  /* Over ~40 units: bars (outline = expected, teal = done, wine hatch = the gap); --v is the done share 0–1 */
   .tally-bars { display: grid; grid-template-columns: minmax(0, max-content) minmax(6rem, 1fr) auto; align-items: center; gap: var(--space-2) var(--space-3); }
   .tally-bars__label { color: var(--color-muted); font-size: var(--c-text-xs); overflow-wrap: break-word; }
   .tally-bars__track { position: relative; height: 14px; border: var(--border-width-hair) solid var(--color-border-strong); border-radius: var(--radius-cell); }
   .tally-bars__track::before, .tally-bars__track::after { content: ""; position: absolute; top: 2px; bottom: 2px; }
-  .tally-bars__track::before { left: 2px; width: calc((100% - 4px) * var(--v, 1)); background: var(--color-accent); }
-  .tally-bars__track::after { right: 2px; width: calc((100% - 4px) * (1 - var(--v, 1))); background: repeating-linear-gradient(135deg, var(--color-bad) 0 1.5px, transparent 1.5px 5px); }
+  .tally-bars__track::before { left: 2px; width: calc((100% - 4px) * var(--v, 1)); background: var(--color-data-measured); }
+  .tally-bars__track::after { right: 2px; width: calc((100% - 4px) * (1 - var(--v, 1))); background: repeating-linear-gradient(135deg, var(--color-data-broken) 0 1.5px, transparent 1.5px 5px); }
   .tally-bars__value { color: var(--color-text-strong); font: var(--font-weight-medium) var(--c-text-sm) / 1 var(--font-mono); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
   /* --- MiniBars: outcomes by tone (overview) --- */
@@ -567,7 +452,8 @@
   .minibars__fill { display: block; width: var(--v, 0%); height: 100%; background: currentColor; }
   .minibars__row[data-tone="ok"] { color: var(--color-ok); }
   .minibars__row[data-tone="warn"] { color: var(--color-warn); }
-  .minibars__row:is([data-tone="bad"], [data-tone="risk"]) { color: var(--color-bad); }
+  .minibars__row[data-tone="bad"] { color: var(--color-bad); }
+  .minibars__row[data-tone="risk"] { color: var(--color-risk); }
   .minibars__row[data-tone="risk"] .minibars__fill { background: repeating-linear-gradient(135deg, currentColor 0 1.5px, transparent 1.5px 4px); }
   .minibars__row[data-tone="muted"] { color: var(--color-muted); }
   .minibars__n { color: var(--color-text-strong); text-align: right; font-variant-numeric: tabular-nums; }
@@ -632,7 +518,7 @@
   .live-status > .status { overflow: hidden; text-overflow: ellipsis; }
   .health { display: inline-flex; text-decoration: none; }
   .health:hover .status { text-decoration: underline; }
-  .feature-group { margin: var(--space-5) 0 var(--space-2); color: var(--color-muted); font: var(--font-weight-medium) var(--c-text-xs) / 1.2 var(--font-mono); text-transform: uppercase; letter-spacing: 0.04em; }
+  .feature-group { margin: var(--space-5) 0 var(--space-2); color: var(--color-muted); font: var(--font-weight-medium) var(--c-text-xs) / 1.2 var(--font-body); text-transform: uppercase; letter-spacing: 0.04em; }
   .feature-grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); }
   .feature { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-2); min-width: 0; padding: var(--space-3) var(--space-4); text-align: left;
     border: var(--border-width-hair) solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text); font: inherit; cursor: pointer;
@@ -647,7 +533,7 @@
   .filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); width: 100%; }
   .filters .select { max-width: 11rem; min-height: var(--c-control-h-sm); font-size: var(--c-text-sm); }
   .chip { display: inline-flex; align-items: center; gap: 6px; min-height: var(--c-control-h-sm); padding: 0 8px; border: var(--border-width-hair) solid var(--color-border-strong);
-    border-radius: var(--radius-sm); background: transparent; color: var(--color-text); font: var(--font-weight-medium) var(--c-text-xs) / 1 var(--font-mono); white-space: nowrap;
+    border-radius: var(--radius-sm); background: transparent; color: var(--color-text); font: var(--font-weight-medium) var(--c-text-xs) / 1 var(--font-body); white-space: nowrap;
     transition: background-color var(--motion-fast) var(--motion-ease-out), border-color var(--motion-fast) var(--motion-ease-out); }
   .chip:hover { border-color: var(--color-text-strong); background: var(--color-surface-2); }
   .chip[aria-pressed="true"] { border-color: var(--color-accent); background: var(--color-accent-soft); color: var(--color-text-strong); }
@@ -663,7 +549,7 @@
   .event-item .status-row { grid-column: 2; }
   .segmented { display: flex; flex-wrap: wrap; gap: var(--space-1); }
   .segmented > a { display: inline-flex; align-items: center; gap: 6px; min-height: var(--c-control-h-sm); padding: 0 8px; border: var(--border-width-hair) solid var(--color-border-strong);
-    border-radius: var(--radius-sm); color: var(--color-text); font: var(--font-weight-medium) var(--c-text-xs) / 1 var(--font-mono); text-decoration: none; }
+    border-radius: var(--radius-sm); color: var(--color-text); font: var(--font-weight-medium) var(--c-text-xs) / 1 var(--font-body); text-decoration: none; }
   .segmented > a:hover { background: var(--color-surface-2); }
   .segmented > a[aria-current] { border-color: var(--color-accent); background: var(--color-accent-soft); color: var(--color-text-strong); }
 
@@ -682,7 +568,7 @@
   :root[data-density="compact"] .kv > dt, :root[data-density="compact"] .kv > dd { padding-block: 2px; }
 
   .hl { background: var(--color-selection); color: var(--color-text-strong); border-radius: var(--radius-cell); }
-  .group-title { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); color: var(--color-muted); font: var(--font-weight-medium) var(--c-text-xs) / 1.3 var(--font-mono); }
+  .group-title { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); color: var(--color-muted); font: var(--font-weight-medium) var(--c-text-xs) / 1.3 var(--font-body); }
   .group-title:first-child { margin-top: 0; }
   .reason { color: var(--color-text); font-size: var(--c-text-sm); overflow-wrap: anywhere; }
   .reason code, .note code, .message code, .empty__text code, .callout code, .field__hint code { color: var(--color-text-strong); overflow-wrap: anywhere; }
@@ -757,6 +643,8 @@
     border-bottom: var(--border-width-hair) solid var(--color-border); font-size: var(--c-text-sm); }
   .banner > p { flex: 1 1 14rem; min-width: 0; }
   .signin__lead { color: var(--color-muted); font-size: var(--c-text-sm); }
+  .signin__pano { height: 72px; margin: var(--space-2) calc(-1 * var(--space-6)) calc(-1 * var(--space-6)); overflow: hidden;
+    border-top: var(--border-width-hair) solid var(--color-border); border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
   .signin__title { color: var(--color-text-strong); font: var(--font-weight-display) var(--c-text-xl) / 1.15 var(--font-display); }
   .pw { display: flex; gap: var(--space-2); }
   .pw > .input { flex: 1; }
@@ -767,7 +655,7 @@
     .table[data-stack] thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
     .table[data-stack] tr { padding: var(--space-2) 0; border-bottom: var(--border-width-hair) solid var(--color-border); }
     .table[data-stack] :is(td, th) { padding: 2px var(--space-3); border: 0; text-align: left !important; white-space: normal !important; }
-    .table[data-stack] td[data-label]::before { content: attr(data-label); display: block; color: var(--color-muted); font: var(--c-text-xs) / 1.4 var(--font-mono); }
+    .table[data-stack] td[data-label]::before { content: attr(data-label); display: block; color: var(--color-muted); font: var(--c-text-xs) / 1.4 var(--font-body); }
     .table[data-stack] td[data-fit] { width: auto; }
   }
 }
@@ -825,7 +713,7 @@
 </style>
 </head>
 <body>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="ai-lockup" viewBox="-0.1 1.4 1565.6 199.3"><path fill="currentColor" d="M39.42 161.88Q29.25 161.88 20.24 158.48Q11.23 155.07 5.59 147.83Q-0.04 140.6 -0.04 129.14Q-0.04 116.76 7.11 108.68Q14.26 100.6 27.35 96.63Q40.44 92.67 58.36 92.67H72.43L70.63 95.8V89.43Q70.63 79.65 67.27 75.14Q63.92 70.63 56.2 70.63Q48.71 70.63 44.83 74.61Q40.95 78.6 39.68 86.32L4.75 80.68Q6.67 71.59 12.85 64.28Q19.04 56.97 30.18 52.67Q41.32 48.37 58.11 48.37Q72.86 48.37 83.43 52.77Q94 57.17 99.67 67.77Q105.33 78.37 105.33 97.05V128.66Q105.33 132.04 106.28 133.14Q107.23 134.24 106.4 134.24H109.4V159.24H99.05Q85.49 159.24 78.81 152.72Q72.13 146.19 72.13 133.48V129.41L78.48 132.16Q77.27 136.52 74.94 141.62Q72.61 146.71 68.28 151.33Q63.96 155.94 56.94 158.91Q49.92 161.88 39.42 161.88ZM49.9 139Q56.4 139 61.1 136.12Q65.8 133.23 68.38 127.75Q70.96 122.26 70.96 114.47V111.52H60.12Q50.51 111.52 45.22 114.04Q39.93 116.56 37.87 120.14Q35.81 123.72 35.81 127.09Q35.81 129.28 36.89 132.08Q37.97 134.88 41 136.94Q44.02 139 49.9 139ZM119 159.24 154.1 159.24 154.1 55.14 119 49.44Z M241.09 159.24Q233.92 159.24 228.9 154.78Q223.88 150.31 223.88 143.2V66.31H206.75V51.24H223.88V28.83L242.45 24.75V51.24H263.65V66.31H242.45V138.67Q242.45 141.98 243.4 143.08Q244.35 144.18 247.45 144.18H263.95V159.24Z M314.75 161.67Q304.01 161.67 295.96 157.59Q287.91 153.51 283.48 146.31Q279.05 139.1 279.05 129.78Q279.05 119.82 284.89 111.63Q290.73 103.44 302.79 98.59Q314.85 93.73 333.48 93.73H351.1L349.3 95.66V89.71Q349.3 77.03 344.28 70.31Q339.25 63.6 327.49 63.6Q316.37 63.6 310.4 69.36Q304.42 75.12 303.94 84.9L283.49 80.47Q284.49 71.73 290.28 64.56Q296.07 57.4 305.87 53.1Q315.66 48.8 328.76 48.8Q342.01 48.8 350.49 53.7Q358.96 58.59 363.03 68.02Q367.11 77.44 367.11 91.08V138.67Q367.11 141.98 368.06 143.08Q369.01 144.18 372.11 144.18H378.04V159.24H366.86Q359.41 159.24 354.6 154.77Q349.8 150.3 349.8 143.2V135.95L352.68 136.21Q351.11 140.43 348.18 144.85Q345.24 149.27 340.67 153.1Q336.1 156.94 329.68 159.3Q323.27 161.67 314.75 161.67ZM319.2 146.81Q327.33 146.81 334.19 142.83Q341.06 138.84 345.24 130.41Q349.42 121.97 349.42 108.58V107.48H333.1Q320.16 107.48 312.74 110.88Q305.32 114.29 302.23 119.29Q299.14 124.28 299.14 129.22Q299.14 134.04 301.32 138.01Q303.5 141.98 307.95 144.4Q312.4 146.81 319.2 146.81Z M439.16 200.67Q414.78 200.67 403.21 193.9Q391.64 187.13 391.64 172.98Q391.64 164.87 395.8 158.68Q399.96 152.48 409.75 149.2Q405.96 146.85 403.6 143.04Q401.23 139.22 401.23 134.53Q401.23 128.86 404.77 124.39Q408.31 119.92 414.9 118Q406.9 113.27 402.46 105.24Q398.01 97.21 398.01 86.6Q398.01 75.01 403.25 66.53Q408.48 58.06 418.14 53.44Q427.81 48.81 441.1 48.81Q454.39 48.81 464.14 53.44Q473.89 58.06 479.22 66.58Q484.55 75.1 484.55 86.78Q484.55 98.27 479.22 106.66Q473.9 115.04 464.1 119.61Q454.3 124.19 440.81 124.19H431.79Q419.57 124.19 419.57 131.4Q419.57 138.23 431.46 138.23H453.09Q465.66 138.23 473.49 141.14Q481.33 144.05 485.57 148.69Q489.82 153.33 491.42 158.8Q493.01 164.26 493.01 169.38Q493.01 185.35 481.31 193.01Q469.6 200.67 445.04 200.67ZM439.25 186.51H445.1Q473.87 186.51 473.87 169.32Q473.87 162.21 468.72 157.68Q463.57 153.15 451.02 153.15H433.03Q423.54 153.15 417.07 157.05Q410.6 160.95 410.6 169.83Q410.6 178.31 417.61 182.41Q424.63 186.51 439.25 186.51ZM441.1 111.46Q453.26 111.46 459.78 105.11Q466.3 98.76 466.3 86.78Q466.3 74.9 459.78 68.32Q453.26 61.73 441.1 61.73Q429.04 61.73 422.6 68.27Q416.16 74.81 416.16 86.78Q416.16 98.76 422.6 105.11Q429.04 111.46 441.1 111.46ZM458.66 60.69V49.96Q458.66 42.85 463.68 38.39Q468.7 33.92 475.87 33.92H488.51V48.98H477.63Q474.53 48.98 473.58 50.08Q472.63 51.18 472.63 54.49V60.69Z M552.86 200.67Q528.48 200.67 516.91 193.9Q505.34 187.13 505.34 172.98Q505.34 164.87 509.5 158.68Q513.66 152.48 523.45 149.2Q519.66 146.85 517.3 143.04Q514.93 139.22 514.93 134.53Q514.93 128.86 518.47 124.39Q522.01 119.92 528.6 118Q520.6 113.27 516.16 105.24Q511.71 97.21 511.71 86.6Q511.71 75.01 516.95 66.53Q522.18 58.06 531.84 53.44Q541.51 48.81 554.8 48.81Q568.09 48.81 577.84 53.44Q587.59 58.06 592.92 66.58Q598.25 75.1 598.25 86.78Q598.25 98.27 592.92 106.66Q587.6 115.04 577.8 119.61Q568 124.19 554.51 124.19H545.49Q533.27 124.19 533.27 131.4Q533.27 138.23 545.16 138.23H566.79Q579.36 138.23 587.19 141.14Q595.03 144.05 599.27 148.69Q603.52 153.33 605.12 158.8Q606.71 164.26 606.71 169.38Q606.71 185.35 595.01 193.01Q583.3 200.67 558.74 200.67ZM552.95 186.51H558.8Q587.57 186.51 587.57 169.32Q587.57 162.21 582.42 157.68Q577.27 153.15 564.72 153.15H546.73Q537.24 153.15 530.77 157.05Q524.3 160.95 524.3 169.83Q524.3 178.31 531.31 182.41Q538.33 186.51 552.95 186.51ZM554.8 111.46Q566.96 111.46 573.48 105.11Q580 98.76 580 86.78Q580 74.9 573.48 68.32Q566.96 61.73 554.8 61.73Q542.74 61.73 536.3 68.27Q529.86 74.81 529.86 86.78Q529.86 98.76 536.3 105.11Q542.74 111.46 554.8 111.46ZM572.36 60.69V49.96Q572.36 42.85 577.38 38.39Q582.4 33.92 589.57 33.92H602.21V48.98H591.33Q588.23 48.98 587.28 50.08Q586.33 51.18 586.33 54.49V60.69Z M627.76 159.24V51.24H646.32V159.24ZM637.04 33.85Q630.81 33.85 626.54 29.58Q622.27 25.3 622.27 19.08Q622.27 12.76 626.54 8.53Q630.81 4.3 637.04 4.3Q643.36 4.3 647.59 8.53Q651.82 12.76 651.82 19.08Q651.82 25.3 647.59 29.58Q643.36 33.85 637.04 33.85Z M678.36 159.24V51.24H695.92V75.71L695.21 71.31Q699.6 61.82 708.86 55.31Q718.11 48.81 731.35 48.81Q742.99 48.81 751.26 54Q759.52 59.18 763.94 68.72Q768.35 78.26 768.35 91.54V159.24H749.79V92.92Q749.79 79.87 744.57 71.92Q739.34 63.97 727.27 63.97Q714.09 63.97 705.51 74.12Q696.92 84.27 696.92 103.69V159.24Z M838.76 200.67Q814.38 200.67 802.81 193.9Q791.24 187.13 791.24 172.98Q791.24 164.87 795.4 158.68Q799.56 152.48 809.35 149.2Q805.56 146.85 803.2 143.04Q800.83 139.22 800.83 134.53Q800.83 128.86 804.37 124.39Q807.91 119.92 814.5 118Q806.5 113.27 802.06 105.24Q797.61 97.21 797.61 86.6Q797.61 75.01 802.85 66.53Q808.08 58.06 817.74 53.44Q827.41 48.81 840.7 48.81Q853.99 48.81 863.74 53.44Q873.49 58.06 878.82 66.58Q884.15 75.1 884.15 86.78Q884.15 98.27 878.82 106.66Q873.5 115.04 863.7 119.61Q853.9 124.19 840.41 124.19H831.39Q819.17 124.19 819.17 131.4Q819.17 138.23 831.06 138.23H852.69Q865.26 138.23 873.09 141.14Q880.93 144.05 885.17 148.69Q889.42 153.33 891.02 158.8Q892.61 164.26 892.61 169.38Q892.61 185.35 880.91 193.01Q869.2 200.67 844.64 200.67ZM838.85 186.51H844.7Q873.47 186.51 873.47 169.32Q873.47 162.21 868.32 157.68Q863.17 153.15 850.62 153.15H832.63Q823.14 153.15 816.67 157.05Q810.2 160.95 810.2 169.83Q810.2 178.31 817.21 182.41Q824.23 186.51 838.85 186.51ZM840.7 111.46Q852.86 111.46 859.38 105.11Q865.9 98.76 865.9 86.78Q865.9 74.9 859.38 68.32Q852.86 61.73 840.7 61.73Q828.64 61.73 822.2 68.27Q815.76 74.81 815.76 86.78Q815.76 98.76 822.2 105.11Q828.64 111.46 840.7 111.46ZM858.26 60.69V49.96Q858.26 42.85 863.28 38.39Q868.3 33.92 875.47 33.92H888.11V48.98H877.23Q874.13 48.98 873.18 50.08Q872.23 51.18 872.23 54.49V60.69Z  M1002.89 161.67Q991.12 161.67 981.4 157.87Q971.68 154.06 965.23 146.25Q958.79 138.45 956.7 126.36L975.6 122.69Q976.67 134.91 983.95 140.89Q991.23 146.88 1002.47 146.88Q1013.58 146.88 1020.03 141.42Q1026.48 135.96 1026.48 128.15Q1026.48 121.46 1021.86 117.46Q1017.24 113.45 1008.23 111.79L995.57 109.41Q990.21 108.43 984.39 106.66Q978.57 104.89 973.5 101.7Q968.43 98.51 965.3 93.26Q962.17 88.01 962.17 79.98Q962.17 69.36 967.74 62.49Q973.31 55.63 982.6 52.22Q991.89 48.81 1002.84 48.81Q1014.51 48.81 1023.3 52.41Q1032.09 56 1037.67 62.72Q1043.25 69.44 1045.08 79.03L1025.4 82.99Q1024.7 77.15 1022.23 72.77Q1019.76 68.4 1015.03 65.98Q1010.3 63.56 1002.71 63.56Q993.63 63.56 987.22 67.33Q980.82 71.11 980.82 78.64Q980.82 82.96 983.11 85.97Q985.4 88.97 989.93 90.95Q994.47 92.92 1001.19 94.35L1014.21 97.03Q1022.64 98.68 1029.82 102.04Q1037.01 105.4 1041.39 111.37Q1045.77 117.34 1045.77 127.14Q1045.77 137.94 1040.3 145.72Q1034.83 153.49 1025.19 157.58Q1015.56 161.67 1002.89 161.67Z M1117.09 161.67Q1101.63 161.67 1090.19 154.77Q1078.75 147.87 1072.47 135.21Q1066.2 122.54 1066.2 105.31Q1066.2 88.01 1072.45 75.32Q1078.71 62.62 1090.01 55.72Q1101.31 48.81 1116.46 48.81Q1125.1 48.81 1133.82 51.56Q1142.54 54.31 1149.76 61.07Q1156.98 67.84 1161.38 79.65Q1165.77 91.47 1165.77 109.51H1078.13V95.45H1149.56L1144.98 101.62Q1144.44 87.88 1140.46 79.55Q1136.49 71.22 1130.16 67.48Q1123.83 63.75 1116.09 63.75Q1106.8 63.75 1100.12 68.64Q1093.44 73.53 1089.89 82.83Q1086.33 92.13 1086.33 105.42Q1086.33 125.05 1094.28 135.82Q1102.23 146.59 1117.06 146.59Q1127.59 146.59 1134.82 141.27Q1142.05 135.95 1145.5 125.79L1163.42 131.56Q1159.53 141.2 1152.87 147.91Q1146.21 154.62 1137.12 158.15Q1128.04 161.67 1117.09 161.67Z M1190.56 159.24V51.24H1208.12V74.33L1207.44 71.66Q1212.28 60.34 1221.88 54.58Q1231.48 48.81 1241.54 48.81Q1244.47 48.81 1247.28 49.31Q1250.09 49.81 1252.59 51.01L1250.38 68.12Q1244.74 66.41 1239.26 66.41Q1235.65 66.41 1230.57 67.8Q1225.48 69.2 1220.58 73.28Q1215.68 77.36 1212.4 85.32Q1209.12 93.28 1209.12 106.41V159.24Z M1304.2 159.24 1263.56 51.24H1284.15L1317.42 148.16H1314.28L1347.37 51.24H1367.96L1327.5 159.24Z M1429.99 161.67Q1414.53 161.67 1403.09 154.77Q1391.65 147.87 1385.37 135.21Q1379.1 122.54 1379.1 105.31Q1379.1 88.01 1385.35 75.32Q1391.61 62.62 1402.91 55.72Q1414.21 48.81 1429.36 48.81Q1438 48.81 1446.72 51.56Q1455.44 54.31 1462.66 61.07Q1469.88 67.84 1474.28 79.65Q1478.67 91.47 1478.67 109.51H1391.03V95.45H1462.46L1457.88 101.62Q1457.34 87.88 1453.36 79.55Q1449.39 71.22 1443.06 67.48Q1436.73 63.75 1428.99 63.75Q1419.7 63.75 1413.02 68.64Q1406.34 73.53 1402.79 82.83Q1399.23 92.13 1399.23 105.42Q1399.23 125.05 1407.18 135.82Q1415.13 146.59 1429.96 146.59Q1440.49 146.59 1447.72 141.27Q1454.95 135.95 1458.4 125.79L1476.32 131.56Q1472.43 141.2 1465.77 147.91Q1459.11 154.62 1450.02 158.15Q1440.94 161.67 1429.99 161.67Z M1503.46 159.24V51.24H1521.02V74.33L1520.34 71.66Q1525.18 60.34 1534.78 54.58Q1544.38 48.81 1554.44 48.81Q1557.37 48.81 1560.18 49.31Q1562.99 49.81 1565.49 51.01L1563.28 68.12Q1557.64 66.41 1552.16 66.41Q1548.55 66.41 1543.47 67.8Q1538.38 69.2 1533.48 73.28Q1528.58 77.36 1525.3 85.32Q1522.02 93.28 1522.02 106.41V159.24Z"/><path style="fill:var(--ai-point)" d="M158.51 13.21C162.22 24.64 158.23 35.1 145.98 38.19C134.52 41.06 123.86 38.6 120.13 27.81C116.74 18.2 121.96 6.11 132.86 2.77C143.37 -0.45 154.81 1.77 158.51 13.21Z"/></symbol><symbol id="ai-master" viewBox="0.5 0.4 630.3 95.1"><path fill="currentColor" d="M18.69 73.87Q13.39 74.14 9.32 72.01Q5.24 69.89 2.88 66.02Q0.52 62.15 0.52 57.11Q0.52 51.85 3.23 48.08Q5.93 44.31 10.49 42.23Q15.05 40.16 20.63 40.16Q23.66 40.16 26.15 40.5Q28.64 40.85 30.6 41.34Q32.55 41.83 33.65 42.51L33.6 40.55Q33.6 36.69 30.64 34.19Q27.68 31.68 22.49 31.68Q19.02 31.68 15.79 33.26Q12.56 34.84 10.35 37.63L1.91 30.84Q4.45 27.48 7.69 25.26Q10.92 23.04 14.84 21.91Q18.76 20.78 23.07 20.78Q34.53 20.78 40.52 26.12Q46.51 31.45 46.51 41.71V72.58H33.6V67.41L33.05 67.53Q31.73 69.2 29.67 70.73Q27.61 72.26 24.87 73.2Q22.12 74.14 18.69 73.87Z M125.55 73.87Q120.25 74.14 116.18 72.01Q112.1 69.89 109.74 66.02Q107.38 62.15 107.38 57.11Q107.38 51.85 110.09 48.08Q112.79 44.31 117.35 42.23Q121.91 40.16 127.49 40.16Q130.52 40.16 133.01 40.5Q135.5 40.85 137.46 41.34Q139.41 41.83 140.51 42.51L140.46 40.55Q140.46 36.69 137.5 34.19Q134.54 31.68 129.35 31.68Q125.88 31.68 122.65 33.26Q119.42 34.84 117.21 37.63L108.77 30.84Q111.31 27.48 114.55 25.26Q117.78 23.04 121.7 21.91Q125.62 20.78 129.93 20.78Q141.39 20.78 147.38 26.12Q153.37 31.45 153.37 41.71V72.58H140.46V67.41L139.92 67.53Q138.59 69.2 136.53 70.73Q134.48 72.26 131.73 73.2Q128.98 74.14 125.55 73.87Z M450.75 73.87Q443.21 74.14 437.29 70.69Q431.36 67.25 427.98 61.24Q424.6 55.23 424.6 47.56Q424.6 40.38 427.93 34.27Q431.26 28.17 437.04 24.47Q442.82 20.78 450.26 20.78Q458.29 20.78 463.78 24.23Q469.27 27.68 472.12 33.45Q474.96 39.21 474.96 46.19Q474.96 47.76 474.86 48.91Q474.76 50.05 474.63 50.77H437.51Q437.95 53.33 439.04 55.35Q440.87 58.74 443.99 60.51Q447.11 62.27 450.95 62.27Q455.46 62.27 458.54 60.31Q461.62 58.36 463.42 55.19L474.05 60.5Q470.45 66.95 464.76 70.55Q459.07 74.14 450.75 73.87Z M265.67 72.58V2.26H278.77V40.4L296.99 22.34H312.92V23.5L294.27 41.82L313.81 71.45V72.58H298.43L284.98 50.94L278.77 57.04V72.58Z M379.8 95.41Q376.24 95.68 373.67 93.78Q371.1 91.88 369.95 88.83L376.5 85.98Q376.93 87.36 377.77 88.07Q378.6 88.79 379.8 88.79Q381.29 88.79 382.07 87.95Q382.85 87.11 382.85 85.95Q382.85 84.79 382.06 83.86Q381.28 82.92 379.8 82.92Q378.98 82.92 378.37 83.33Q377.77 83.73 377.22 84.34L371.04 81.42L373.96 73.81Q370.13 73.5 367.13 72.27Q362.57 70.4 359.72 67.33Q356.87 64.27 355.44 60.37L367.14 55.19Q368.84 58.85 371.62 60.61Q374.39 62.36 378.14 62.36Q381.23 62.36 383.69 61.4Q386.15 60.44 386.15 57.89Q386.15 56.07 384.88 55.01Q383.61 53.96 381.69 53.34Q379.76 52.72 377.72 52.33L371.88 51.06Q368.25 50.27 365.01 48.24Q361.77 46.21 359.75 43.08Q357.73 39.95 357.73 35.87Q357.73 31.3 360.35 27.91Q362.96 24.54 367.42 22.66Q371.89 20.78 377.27 20.78Q382.26 20.78 386.28 21.96Q390.3 23.14 393.25 25.57Q396.2 27.99 398.04 32L386.81 37Q385.22 33.95 382.78 32.81Q380.35 31.68 377.57 31.68Q374.31 31.68 372.43 32.88Q370.54 34.08 370.54 35.67Q370.54 37.38 372.43 38.68Q374.32 39.98 377.02 40.65L384.32 42.41Q391.77 44.18 395.56 48.15Q399.35 52.12 399.35 57.7Q399.35 62.66 396.49 66.38Q393.64 70.1 388.83 72.12Q385.12 73.68 380.77 73.88L379.45 76.78Q379.79 76.52 380.19 76.52H381.07Q384.94 76.52 387.67 79.08Q390.39 81.65 390.39 86.05Q390.39 88.76 389.05 90.97Q387.71 93.18 385.33 94.43Q382.96 95.68 379.8 95.41Z M54.87 72.58V22.34H67.19V28.69L67.72 28.57Q69.94 25.03 74.06 22.91Q78.18 20.78 82.99 20.78Q92.21 20.78 96.83 26.42Q101.45 32.06 101.45 41.42V72.58H88.34V43Q88.34 38.25 85.92 35.74Q83.49 33.24 79.28 33.24Q75.83 33.24 73.29 35.09Q70.76 36.95 69.36 40.05Q67.97 43.16 67.97 47V72.58Z M202.33 33.83V22.34H210.97V8.3H224.07V22.34H236.22V33.83H224.07V54.06Q224.07 57.56 225.49 59.18Q226.9 60.8 230.13 60.8Q231.66 60.8 233 60.38Q234.34 59.95 236.61 58.44V71.62Q234.35 72.48 232.14 72.92Q229.94 73.36 227.59 73.09Q219.82 73.36 215.4 68.85Q210.97 64.33 210.97 56.43V33.83Z M161.73 72.58V2.26H174.83V72.58Z M405.17 72.58V2.26H418.27V72.58Z M481.28 72.58V22.34H493.6V29.07L494.13 28.97Q495.36 26.72 497.48 24.89Q499.59 23.05 502.44 21.96Q505.29 20.88 508.52 20.88Q510.49 20.88 512.06 21.18Q513.63 21.47 514.91 22.04V35.41Q512.66 34.5 510.68 33.97Q508.7 33.44 506.48 33.44Q502.74 33.44 500 35.28Q497.27 37.13 495.83 40.33Q494.38 43.53 494.38 47.57V72.58Z M183.87 72.58V22.34H196.97V72.58Z M243.53 72.58V22.34H256.63V72.58Z M336.95 72.58V22.34H350.05V72.58Z M128.57 63.9Q132.41 63.63 135.05 61.97Q137.68 60.31 139.07 57.65Q140.46 54.99 140.46 52.21Q138.43 51.24 135.72 50.62Q133.02 49.99 130.21 49.99Q124.65 49.99 122.57 52.05Q120.48 54.11 120.48 57.1Q120.48 59.9 122.52 61.76Q124.56 63.63 128.57 63.9Z M21.71 63.9Q25.55 63.63 28.18 61.97Q30.82 60.31 32.21 57.65Q33.6 54.99 33.6 52.21Q31.57 51.24 28.86 50.62Q26.16 49.99 23.35 49.99Q17.79 49.99 15.71 52.05Q13.62 54.11 13.62 57.1Q13.62 59.9 15.66 61.76Q17.69 63.63 21.71 63.9Z M438.05 41.16 462.35 41.26Q462.25 39.84 461.39 38.13Q460.53 36.44 459 35.01Q457.47 33.59 455.31 32.68Q453.15 31.78 450.37 31.78Q446.72 31.78 443.7 33.68Q440.67 35.59 438.94 38.98Q438.41 40.01 438.05 41.16Z M190.47 17.18Q186.99 17.46 184.5 14.94Q182.02 12.41 182.02 8.88Q182.02 5.35 184.5 2.88Q186.99 0.41 190.47 0.41Q193.95 0.41 196.38 2.88Q198.82 5.35 198.82 8.88Q198.82 12.41 196.38 14.93Q193.95 17.46 190.47 17.18Z M250.12 17.18Q246.65 17.46 244.16 14.94Q241.68 12.41 241.68 8.88Q241.68 5.35 244.16 2.88Q246.65 0.41 250.12 0.41Q253.6 0.41 256.04 2.88Q258.48 5.35 258.48 8.88Q258.48 12.41 256.04 14.93Q253.6 17.46 250.12 17.18Z"/><path fill="currentColor" d="M571.52 72.3V6.88C571.52 5.67 572.5 4.69 573.71 4.69H598.34C599.55 4.69 600.53 5.67 600.53 6.88V72.3ZM541.25 72.3V23.43C541.25 22.22 542.23 21.25 543.43 21.25H569.12V72.3ZM603 72.3V30.99H628.56C629.77 30.99 630.75 31.97 630.75 33.18V72.3Z"/><path style="fill:var(--ai-point)" d="M353.23 5.91C354.89 11.02 353.11 15.7 347.63 17.08C342.51 18.36 337.75 17.27 336.08 12.44C334.56 8.14 336.89 2.74 341.77 1.25C346.47 -0.19 351.58 0.8 353.23 5.91Z"/></symbol></svg>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="ai-lockup" viewBox="-0.1 1.4 1565.6 199.3"><path fill="currentColor" d="M39.42 161.88Q29.25 161.88 20.24 158.48Q11.23 155.07 5.59 147.83Q-0.04 140.6 -0.04 129.14Q-0.04 116.76 7.11 108.68Q14.26 100.6 27.35 96.63Q40.44 92.67 58.36 92.67H72.43L70.63 95.8V89.43Q70.63 79.65 67.27 75.14Q63.92 70.63 56.2 70.63Q48.71 70.63 44.83 74.61Q40.95 78.6 39.68 86.32L4.75 80.68Q6.67 71.59 12.85 64.28Q19.04 56.97 30.18 52.67Q41.32 48.37 58.11 48.37Q72.86 48.37 83.43 52.77Q94 57.17 99.67 67.77Q105.33 78.37 105.33 97.05V128.66Q105.33 132.04 106.28 133.14Q107.23 134.24 106.4 134.24H109.4V159.24H99.05Q85.49 159.24 78.81 152.72Q72.13 146.19 72.13 133.48V129.41L78.48 132.16Q77.27 136.52 74.94 141.62Q72.61 146.71 68.28 151.33Q63.96 155.94 56.94 158.91Q49.92 161.88 39.42 161.88ZM49.9 139Q56.4 139 61.1 136.12Q65.8 133.23 68.38 127.75Q70.96 122.26 70.96 114.47V111.52H60.12Q50.51 111.52 45.22 114.04Q39.93 116.56 37.87 120.14Q35.81 123.72 35.81 127.09Q35.81 129.28 36.89 132.08Q37.97 134.88 41 136.94Q44.02 139 49.9 139ZM119 159.24 154.1 159.24 154.1 55.14 119 49.44Z M241.09 159.24Q233.92 159.24 228.9 154.78Q223.88 150.31 223.88 143.2V66.31H206.75V51.24H223.88V28.83L242.45 24.75V51.24H263.65V66.31H242.45V138.67Q242.45 141.98 243.4 143.08Q244.35 144.18 247.45 144.18H263.95V159.24Z M314.75 161.67Q304.01 161.67 295.96 157.59Q287.91 153.51 283.48 146.31Q279.05 139.1 279.05 129.78Q279.05 119.82 284.89 111.63Q290.73 103.44 302.79 98.59Q314.85 93.73 333.48 93.73H351.1L349.3 95.66V89.71Q349.3 77.03 344.28 70.31Q339.25 63.6 327.49 63.6Q316.37 63.6 310.4 69.36Q304.42 75.12 303.94 84.9L283.49 80.47Q284.49 71.73 290.28 64.56Q296.07 57.4 305.87 53.1Q315.66 48.8 328.76 48.8Q342.01 48.8 350.49 53.7Q358.96 58.59 363.03 68.02Q367.11 77.44 367.11 91.08V138.67Q367.11 141.98 368.06 143.08Q369.01 144.18 372.11 144.18H378.04V159.24H366.86Q359.41 159.24 354.6 154.77Q349.8 150.3 349.8 143.2V135.95L352.68 136.21Q351.11 140.43 348.18 144.85Q345.24 149.27 340.67 153.1Q336.1 156.94 329.68 159.3Q323.27 161.67 314.75 161.67ZM319.2 146.81Q327.33 146.81 334.19 142.83Q341.06 138.84 345.24 130.41Q349.42 121.97 349.42 108.58V107.48H333.1Q320.16 107.48 312.74 110.88Q305.32 114.29 302.23 119.29Q299.14 124.28 299.14 129.22Q299.14 134.04 301.32 138.01Q303.5 141.98 307.95 144.4Q312.4 146.81 319.2 146.81Z M439.16 200.67Q414.78 200.67 403.21 193.9Q391.64 187.13 391.64 172.98Q391.64 164.87 395.8 158.68Q399.96 152.48 409.75 149.2Q405.96 146.85 403.6 143.04Q401.23 139.22 401.23 134.53Q401.23 128.86 404.77 124.39Q408.31 119.92 414.9 118Q406.9 113.27 402.46 105.24Q398.01 97.21 398.01 86.6Q398.01 75.01 403.25 66.53Q408.48 58.06 418.14 53.44Q427.81 48.81 441.1 48.81Q454.39 48.81 464.14 53.44Q473.89 58.06 479.22 66.58Q484.55 75.1 484.55 86.78Q484.55 98.27 479.22 106.66Q473.9 115.04 464.1 119.61Q454.3 124.19 440.81 124.19H431.79Q419.57 124.19 419.57 131.4Q419.57 138.23 431.46 138.23H453.09Q465.66 138.23 473.49 141.14Q481.33 144.05 485.57 148.69Q489.82 153.33 491.42 158.8Q493.01 164.26 493.01 169.38Q493.01 185.35 481.31 193.01Q469.6 200.67 445.04 200.67ZM439.25 186.51H445.1Q473.87 186.51 473.87 169.32Q473.87 162.21 468.72 157.68Q463.57 153.15 451.02 153.15H433.03Q423.54 153.15 417.07 157.05Q410.6 160.95 410.6 169.83Q410.6 178.31 417.61 182.41Q424.63 186.51 439.25 186.51ZM441.1 111.46Q453.26 111.46 459.78 105.11Q466.3 98.76 466.3 86.78Q466.3 74.9 459.78 68.32Q453.26 61.73 441.1 61.73Q429.04 61.73 422.6 68.27Q416.16 74.81 416.16 86.78Q416.16 98.76 422.6 105.11Q429.04 111.46 441.1 111.46ZM458.66 60.69V49.96Q458.66 42.85 463.68 38.39Q468.7 33.92 475.87 33.92H488.51V48.98H477.63Q474.53 48.98 473.58 50.08Q472.63 51.18 472.63 54.49V60.69Z M552.86 200.67Q528.48 200.67 516.91 193.9Q505.34 187.13 505.34 172.98Q505.34 164.87 509.5 158.68Q513.66 152.48 523.45 149.2Q519.66 146.85 517.3 143.04Q514.93 139.22 514.93 134.53Q514.93 128.86 518.47 124.39Q522.01 119.92 528.6 118Q520.6 113.27 516.16 105.24Q511.71 97.21 511.71 86.6Q511.71 75.01 516.95 66.53Q522.18 58.06 531.84 53.44Q541.51 48.81 554.8 48.81Q568.09 48.81 577.84 53.44Q587.59 58.06 592.92 66.58Q598.25 75.1 598.25 86.78Q598.25 98.27 592.92 106.66Q587.6 115.04 577.8 119.61Q568 124.19 554.51 124.19H545.49Q533.27 124.19 533.27 131.4Q533.27 138.23 545.16 138.23H566.79Q579.36 138.23 587.19 141.14Q595.03 144.05 599.27 148.69Q603.52 153.33 605.12 158.8Q606.71 164.26 606.71 169.38Q606.71 185.35 595.01 193.01Q583.3 200.67 558.74 200.67ZM552.95 186.51H558.8Q587.57 186.51 587.57 169.32Q587.57 162.21 582.42 157.68Q577.27 153.15 564.72 153.15H546.73Q537.24 153.15 530.77 157.05Q524.3 160.95 524.3 169.83Q524.3 178.31 531.31 182.41Q538.33 186.51 552.95 186.51ZM554.8 111.46Q566.96 111.46 573.48 105.11Q580 98.76 580 86.78Q580 74.9 573.48 68.32Q566.96 61.73 554.8 61.73Q542.74 61.73 536.3 68.27Q529.86 74.81 529.86 86.78Q529.86 98.76 536.3 105.11Q542.74 111.46 554.8 111.46ZM572.36 60.69V49.96Q572.36 42.85 577.38 38.39Q582.4 33.92 589.57 33.92H602.21V48.98H591.33Q588.23 48.98 587.28 50.08Q586.33 51.18 586.33 54.49V60.69Z M627.76 159.24V51.24H646.32V159.24ZM637.04 33.85Q630.81 33.85 626.54 29.58Q622.27 25.3 622.27 19.08Q622.27 12.76 626.54 8.53Q630.81 4.3 637.04 4.3Q643.36 4.3 647.59 8.53Q651.82 12.76 651.82 19.08Q651.82 25.3 647.59 29.58Q643.36 33.85 637.04 33.85Z M678.36 159.24V51.24H695.92V75.71L695.21 71.31Q699.6 61.82 708.86 55.31Q718.11 48.81 731.35 48.81Q742.99 48.81 751.26 54Q759.52 59.18 763.94 68.72Q768.35 78.26 768.35 91.54V159.24H749.79V92.92Q749.79 79.87 744.57 71.92Q739.34 63.97 727.27 63.97Q714.09 63.97 705.51 74.12Q696.92 84.27 696.92 103.69V159.24Z M838.76 200.67Q814.38 200.67 802.81 193.9Q791.24 187.13 791.24 172.98Q791.24 164.87 795.4 158.68Q799.56 152.48 809.35 149.2Q805.56 146.85 803.2 143.04Q800.83 139.22 800.83 134.53Q800.83 128.86 804.37 124.39Q807.91 119.92 814.5 118Q806.5 113.27 802.06 105.24Q797.61 97.21 797.61 86.6Q797.61 75.01 802.85 66.53Q808.08 58.06 817.74 53.44Q827.41 48.81 840.7 48.81Q853.99 48.81 863.74 53.44Q873.49 58.06 878.82 66.58Q884.15 75.1 884.15 86.78Q884.15 98.27 878.82 106.66Q873.5 115.04 863.7 119.61Q853.9 124.19 840.41 124.19H831.39Q819.17 124.19 819.17 131.4Q819.17 138.23 831.06 138.23H852.69Q865.26 138.23 873.09 141.14Q880.93 144.05 885.17 148.69Q889.42 153.33 891.02 158.8Q892.61 164.26 892.61 169.38Q892.61 185.35 880.91 193.01Q869.2 200.67 844.64 200.67ZM838.85 186.51H844.7Q873.47 186.51 873.47 169.32Q873.47 162.21 868.32 157.68Q863.17 153.15 850.62 153.15H832.63Q823.14 153.15 816.67 157.05Q810.2 160.95 810.2 169.83Q810.2 178.31 817.21 182.41Q824.23 186.51 838.85 186.51ZM840.7 111.46Q852.86 111.46 859.38 105.11Q865.9 98.76 865.9 86.78Q865.9 74.9 859.38 68.32Q852.86 61.73 840.7 61.73Q828.64 61.73 822.2 68.27Q815.76 74.81 815.76 86.78Q815.76 98.76 822.2 105.11Q828.64 111.46 840.7 111.46ZM858.26 60.69V49.96Q858.26 42.85 863.28 38.39Q868.3 33.92 875.47 33.92H888.11V48.98H877.23Q874.13 48.98 873.18 50.08Q872.23 51.18 872.23 54.49V60.69Z  M1002.89 161.67Q991.12 161.67 981.4 157.87Q971.68 154.06 965.23 146.25Q958.79 138.45 956.7 126.36L975.6 122.69Q976.67 134.91 983.95 140.89Q991.23 146.88 1002.47 146.88Q1013.58 146.88 1020.03 141.42Q1026.48 135.96 1026.48 128.15Q1026.48 121.46 1021.86 117.46Q1017.24 113.45 1008.23 111.79L995.57 109.41Q990.21 108.43 984.39 106.66Q978.57 104.89 973.5 101.7Q968.43 98.51 965.3 93.26Q962.17 88.01 962.17 79.98Q962.17 69.36 967.74 62.49Q973.31 55.63 982.6 52.22Q991.89 48.81 1002.84 48.81Q1014.51 48.81 1023.3 52.41Q1032.09 56 1037.67 62.72Q1043.25 69.44 1045.08 79.03L1025.4 82.99Q1024.7 77.15 1022.23 72.77Q1019.76 68.4 1015.03 65.98Q1010.3 63.56 1002.71 63.56Q993.63 63.56 987.22 67.33Q980.82 71.11 980.82 78.64Q980.82 82.96 983.11 85.97Q985.4 88.97 989.93 90.95Q994.47 92.92 1001.19 94.35L1014.21 97.03Q1022.64 98.68 1029.82 102.04Q1037.01 105.4 1041.39 111.37Q1045.77 117.34 1045.77 127.14Q1045.77 137.94 1040.3 145.72Q1034.83 153.49 1025.19 157.58Q1015.56 161.67 1002.89 161.67Z M1117.09 161.67Q1101.63 161.67 1090.19 154.77Q1078.75 147.87 1072.47 135.21Q1066.2 122.54 1066.2 105.31Q1066.2 88.01 1072.45 75.32Q1078.71 62.62 1090.01 55.72Q1101.31 48.81 1116.46 48.81Q1125.1 48.81 1133.82 51.56Q1142.54 54.31 1149.76 61.07Q1156.98 67.84 1161.38 79.65Q1165.77 91.47 1165.77 109.51H1078.13V95.45H1149.56L1144.98 101.62Q1144.44 87.88 1140.46 79.55Q1136.49 71.22 1130.16 67.48Q1123.83 63.75 1116.09 63.75Q1106.8 63.75 1100.12 68.64Q1093.44 73.53 1089.89 82.83Q1086.33 92.13 1086.33 105.42Q1086.33 125.05 1094.28 135.82Q1102.23 146.59 1117.06 146.59Q1127.59 146.59 1134.82 141.27Q1142.05 135.95 1145.5 125.79L1163.42 131.56Q1159.53 141.2 1152.87 147.91Q1146.21 154.62 1137.12 158.15Q1128.04 161.67 1117.09 161.67Z M1190.56 159.24V51.24H1208.12V74.33L1207.44 71.66Q1212.28 60.34 1221.88 54.58Q1231.48 48.81 1241.54 48.81Q1244.47 48.81 1247.28 49.31Q1250.09 49.81 1252.59 51.01L1250.38 68.12Q1244.74 66.41 1239.26 66.41Q1235.65 66.41 1230.57 67.8Q1225.48 69.2 1220.58 73.28Q1215.68 77.36 1212.4 85.32Q1209.12 93.28 1209.12 106.41V159.24Z M1304.2 159.24 1263.56 51.24H1284.15L1317.42 148.16H1314.28L1347.37 51.24H1367.96L1327.5 159.24Z M1429.99 161.67Q1414.53 161.67 1403.09 154.77Q1391.65 147.87 1385.37 135.21Q1379.1 122.54 1379.1 105.31Q1379.1 88.01 1385.35 75.32Q1391.61 62.62 1402.91 55.72Q1414.21 48.81 1429.36 48.81Q1438 48.81 1446.72 51.56Q1455.44 54.31 1462.66 61.07Q1469.88 67.84 1474.28 79.65Q1478.67 91.47 1478.67 109.51H1391.03V95.45H1462.46L1457.88 101.62Q1457.34 87.88 1453.36 79.55Q1449.39 71.22 1443.06 67.48Q1436.73 63.75 1428.99 63.75Q1419.7 63.75 1413.02 68.64Q1406.34 73.53 1402.79 82.83Q1399.23 92.13 1399.23 105.42Q1399.23 125.05 1407.18 135.82Q1415.13 146.59 1429.96 146.59Q1440.49 146.59 1447.72 141.27Q1454.95 135.95 1458.4 125.79L1476.32 131.56Q1472.43 141.2 1465.77 147.91Q1459.11 154.62 1450.02 158.15Q1440.94 161.67 1429.99 161.67Z M1503.46 159.24V51.24H1521.02V74.33L1520.34 71.66Q1525.18 60.34 1534.78 54.58Q1544.38 48.81 1554.44 48.81Q1557.37 48.81 1560.18 49.31Q1562.99 49.81 1565.49 51.01L1563.28 68.12Q1557.64 66.41 1552.16 66.41Q1548.55 66.41 1543.47 67.8Q1538.38 69.2 1533.48 73.28Q1528.58 77.36 1525.3 85.32Q1522.02 93.28 1522.02 106.41V159.24Z"/><path style="fill:var(--color-brand-point)" d="M158.51 13.21C162.22 24.64 158.23 35.1 145.98 38.19C134.52 41.06 123.86 38.6 120.13 27.81C116.74 18.2 121.96 6.11 132.86 2.77C143.37 -0.45 154.81 1.77 158.51 13.21Z"/></symbol><symbol id="ai-master" viewBox="0.5 0.4 630.3 95.1"><path fill="currentColor" d="M18.69 73.87Q13.39 74.14 9.32 72.01Q5.24 69.89 2.88 66.02Q0.52 62.15 0.52 57.11Q0.52 51.85 3.23 48.08Q5.93 44.31 10.49 42.23Q15.05 40.16 20.63 40.16Q23.66 40.16 26.15 40.5Q28.64 40.85 30.6 41.34Q32.55 41.83 33.65 42.51L33.6 40.55Q33.6 36.69 30.64 34.19Q27.68 31.68 22.49 31.68Q19.02 31.68 15.79 33.26Q12.56 34.84 10.35 37.63L1.91 30.84Q4.45 27.48 7.69 25.26Q10.92 23.04 14.84 21.91Q18.76 20.78 23.07 20.78Q34.53 20.78 40.52 26.12Q46.51 31.45 46.51 41.71V72.58H33.6V67.41L33.05 67.53Q31.73 69.2 29.67 70.73Q27.61 72.26 24.87 73.2Q22.12 74.14 18.69 73.87Z M125.55 73.87Q120.25 74.14 116.18 72.01Q112.1 69.89 109.74 66.02Q107.38 62.15 107.38 57.11Q107.38 51.85 110.09 48.08Q112.79 44.31 117.35 42.23Q121.91 40.16 127.49 40.16Q130.52 40.16 133.01 40.5Q135.5 40.85 137.46 41.34Q139.41 41.83 140.51 42.51L140.46 40.55Q140.46 36.69 137.5 34.19Q134.54 31.68 129.35 31.68Q125.88 31.68 122.65 33.26Q119.42 34.84 117.21 37.63L108.77 30.84Q111.31 27.48 114.55 25.26Q117.78 23.04 121.7 21.91Q125.62 20.78 129.93 20.78Q141.39 20.78 147.38 26.12Q153.37 31.45 153.37 41.71V72.58H140.46V67.41L139.92 67.53Q138.59 69.2 136.53 70.73Q134.48 72.26 131.73 73.2Q128.98 74.14 125.55 73.87Z M450.75 73.87Q443.21 74.14 437.29 70.69Q431.36 67.25 427.98 61.24Q424.6 55.23 424.6 47.56Q424.6 40.38 427.93 34.27Q431.26 28.17 437.04 24.47Q442.82 20.78 450.26 20.78Q458.29 20.78 463.78 24.23Q469.27 27.68 472.12 33.45Q474.96 39.21 474.96 46.19Q474.96 47.76 474.86 48.91Q474.76 50.05 474.63 50.77H437.51Q437.95 53.33 439.04 55.35Q440.87 58.74 443.99 60.51Q447.11 62.27 450.95 62.27Q455.46 62.27 458.54 60.31Q461.62 58.36 463.42 55.19L474.05 60.5Q470.45 66.95 464.76 70.55Q459.07 74.14 450.75 73.87Z M265.67 72.58V2.26H278.77V40.4L296.99 22.34H312.92V23.5L294.27 41.82L313.81 71.45V72.58H298.43L284.98 50.94L278.77 57.04V72.58Z M379.8 95.41Q376.24 95.68 373.67 93.78Q371.1 91.88 369.95 88.83L376.5 85.98Q376.93 87.36 377.77 88.07Q378.6 88.79 379.8 88.79Q381.29 88.79 382.07 87.95Q382.85 87.11 382.85 85.95Q382.85 84.79 382.06 83.86Q381.28 82.92 379.8 82.92Q378.98 82.92 378.37 83.33Q377.77 83.73 377.22 84.34L371.04 81.42L373.96 73.81Q370.13 73.5 367.13 72.27Q362.57 70.4 359.72 67.33Q356.87 64.27 355.44 60.37L367.14 55.19Q368.84 58.85 371.62 60.61Q374.39 62.36 378.14 62.36Q381.23 62.36 383.69 61.4Q386.15 60.44 386.15 57.89Q386.15 56.07 384.88 55.01Q383.61 53.96 381.69 53.34Q379.76 52.72 377.72 52.33L371.88 51.06Q368.25 50.27 365.01 48.24Q361.77 46.21 359.75 43.08Q357.73 39.95 357.73 35.87Q357.73 31.3 360.35 27.91Q362.96 24.54 367.42 22.66Q371.89 20.78 377.27 20.78Q382.26 20.78 386.28 21.96Q390.3 23.14 393.25 25.57Q396.2 27.99 398.04 32L386.81 37Q385.22 33.95 382.78 32.81Q380.35 31.68 377.57 31.68Q374.31 31.68 372.43 32.88Q370.54 34.08 370.54 35.67Q370.54 37.38 372.43 38.68Q374.32 39.98 377.02 40.65L384.32 42.41Q391.77 44.18 395.56 48.15Q399.35 52.12 399.35 57.7Q399.35 62.66 396.49 66.38Q393.64 70.1 388.83 72.12Q385.12 73.68 380.77 73.88L379.45 76.78Q379.79 76.52 380.19 76.52H381.07Q384.94 76.52 387.67 79.08Q390.39 81.65 390.39 86.05Q390.39 88.76 389.05 90.97Q387.71 93.18 385.33 94.43Q382.96 95.68 379.8 95.41Z M54.87 72.58V22.34H67.19V28.69L67.72 28.57Q69.94 25.03 74.06 22.91Q78.18 20.78 82.99 20.78Q92.21 20.78 96.83 26.42Q101.45 32.06 101.45 41.42V72.58H88.34V43Q88.34 38.25 85.92 35.74Q83.49 33.24 79.28 33.24Q75.83 33.24 73.29 35.09Q70.76 36.95 69.36 40.05Q67.97 43.16 67.97 47V72.58Z M202.33 33.83V22.34H210.97V8.3H224.07V22.34H236.22V33.83H224.07V54.06Q224.07 57.56 225.49 59.18Q226.9 60.8 230.13 60.8Q231.66 60.8 233 60.38Q234.34 59.95 236.61 58.44V71.62Q234.35 72.48 232.14 72.92Q229.94 73.36 227.59 73.09Q219.82 73.36 215.4 68.85Q210.97 64.33 210.97 56.43V33.83Z M161.73 72.58V2.26H174.83V72.58Z M405.17 72.58V2.26H418.27V72.58Z M481.28 72.58V22.34H493.6V29.07L494.13 28.97Q495.36 26.72 497.48 24.89Q499.59 23.05 502.44 21.96Q505.29 20.88 508.52 20.88Q510.49 20.88 512.06 21.18Q513.63 21.47 514.91 22.04V35.41Q512.66 34.5 510.68 33.97Q508.7 33.44 506.48 33.44Q502.74 33.44 500 35.28Q497.27 37.13 495.83 40.33Q494.38 43.53 494.38 47.57V72.58Z M183.87 72.58V22.34H196.97V72.58Z M243.53 72.58V22.34H256.63V72.58Z M336.95 72.58V22.34H350.05V72.58Z M128.57 63.9Q132.41 63.63 135.05 61.97Q137.68 60.31 139.07 57.65Q140.46 54.99 140.46 52.21Q138.43 51.24 135.72 50.62Q133.02 49.99 130.21 49.99Q124.65 49.99 122.57 52.05Q120.48 54.11 120.48 57.1Q120.48 59.9 122.52 61.76Q124.56 63.63 128.57 63.9Z M21.71 63.9Q25.55 63.63 28.18 61.97Q30.82 60.31 32.21 57.65Q33.6 54.99 33.6 52.21Q31.57 51.24 28.86 50.62Q26.16 49.99 23.35 49.99Q17.79 49.99 15.71 52.05Q13.62 54.11 13.62 57.1Q13.62 59.9 15.66 61.76Q17.69 63.63 21.71 63.9Z M438.05 41.16 462.35 41.26Q462.25 39.84 461.39 38.13Q460.53 36.44 459 35.01Q457.47 33.59 455.31 32.68Q453.15 31.78 450.37 31.78Q446.72 31.78 443.7 33.68Q440.67 35.59 438.94 38.98Q438.41 40.01 438.05 41.16Z M190.47 17.18Q186.99 17.46 184.5 14.94Q182.02 12.41 182.02 8.88Q182.02 5.35 184.5 2.88Q186.99 0.41 190.47 0.41Q193.95 0.41 196.38 2.88Q198.82 5.35 198.82 8.88Q198.82 12.41 196.38 14.93Q193.95 17.46 190.47 17.18Z M250.12 17.18Q246.65 17.46 244.16 14.94Q241.68 12.41 241.68 8.88Q241.68 5.35 244.16 2.88Q246.65 0.41 250.12 0.41Q253.6 0.41 256.04 2.88Q258.48 5.35 258.48 8.88Q258.48 12.41 256.04 14.93Q253.6 17.46 250.12 17.18Z"/><path fill="currentColor" d="M571.52 72.3V6.88C571.52 5.67 572.5 4.69 573.71 4.69H598.34C599.55 4.69 600.53 5.67 600.53 6.88V72.3ZM541.25 72.3V23.43C541.25 22.22 542.23 21.25 543.43 21.25H569.12V72.3ZM603 72.3V30.99H628.56C629.77 30.99 630.75 31.97 630.75 33.18V72.3Z"/><path style="fill:var(--color-brand-point)" d="M353.23 5.91C354.89 11.02 353.11 15.7 347.63 17.08C342.51 18.36 337.75 17.27 336.08 12.44C334.56 8.14 336.89 2.74 341.77 1.25C346.47 -0.19 351.58 0.8 353.23 5.91Z"/></symbol></svg>
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true"><defs>
 <symbol id="i-arrow" viewBox="0 0 16 16"><path d="M2.5 8h10M8.75 4.25 12.5 8l-3.75 3.75" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
 <symbol id="i-external" viewBox="0 0 16 16"><path d="M9.25 2.75h4v4M13 3 7.25 8.75M11.25 9.75v3.5h-8.5v-8.5h3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
@@ -841,7 +729,7 @@
 <symbol id="i-st-risk" viewBox="0 0 16 16"><path d="M8 2.5 13.5 8 8 13.5 2.5 8z" fill="currentColor"/></symbol>
 <symbol id="i-st-warn" viewBox="0 0 16 16"><path d="M6.9 2.5h2.2v7.25H6.9zM6.9 11.25h2.2v2.25H6.9z" fill="currentColor"/></symbol>
 <symbol id="i-st-ok" viewBox="0 0 16 16"><path d="M3 8.25 6.5 11.75 13 4.75" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></symbol>
-<symbol id="i-st-skip" viewBox="0 0 16 16"><path d="M4.25 4.25h7.5v7.5h-7.5z" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+<symbol id="i-st-skip" viewBox="0 0 16 16"><path d="M3.5 8h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></symbol>
 <symbol id="i-play" viewBox="0 0 16 16"><path d="M4.75 2.75v10.5L12.5 8z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="miter"/></symbol>
 <symbol id="i-pause" viewBox="0 0 16 16"><path d="M5.25 3.5v9M10.75 3.5v9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></symbol>
 <symbol id="i-refresh" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"><path d="M13 8A5 5 0 1 1 11.54 4.46"/><path d="M11.75 1.5v3h-3"/></g></symbol>
@@ -858,6 +746,7 @@
 <div class="app" id="app" hidden></div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <noscript><p class="note">ai tagging server needs JavaScript.</p></noscript>
+<!-- cini:pano -->
 <script>
 (function () {
 'use strict';
@@ -3756,6 +3645,12 @@ function lockup(cls) {
   return h('span', { class: 'lockup' + (cls ? ' ' + cls : '') },
     lockupParts());
 }
+// The Pano field of the Çini kit: one per screen, never behind text, the same drawing for the same path.
+function pano() {
+  const el = h('div', { class: 'signin__pano pano', 'aria-hidden': 'true' });
+  if (window.Pano) el.innerHTML = window.Pano.field({ cols: 12, rows: 3, seed: location.pathname, startRow: 1, endRow: 1, align: 'xMaxYMid' });
+  return el;
+}
 function showSignin() {
   document.title = t('app.title', { page: t('signin.submit') });
   $('#app').hidden = true;
@@ -3790,7 +3685,8 @@ function showSignin() {
       h('div', { class: 'pw' }, input, show),
       h('span', { class: 'field__hint', id: 'tok-h', text: t('signin.tokenHelp') })),
     msg, submit,
-    h('p', null, byline('rail__byline')));
+    h('p', null, byline('rail__byline')),
+    pano());
   if (S.signinMsg) say(S.signinMsg, S.signinMsg === 'signin.signedOut' ? 'ok' : 'bad');
   S.signinMsg = '';
   form.addEventListener('submit', async (e) => {
@@ -4804,7 +4700,7 @@ function tabSummary(p, d, n) {
   const r = d.result;
   const probs = hitProblems(d);
   if (!r) { p.appendChild(h('p', { class: 'message', 'data-boxed': true }, status(/busy/i.test(d.error || '') ? 'risk' : 'warn', t('severity.' + (/busy/i.test(d.error || '') ? 'risk' : 'warn'))), h('span', null, tn('summary.refused', { message: code(d.error || '') })))); return; }
-  const stack = h('div', { class: 'stack' });
+  const stack = h('div', { class: 'vstack' });
   const ai = aiExplainBox(d);
   if (ai) stack.appendChild(ai);
   if (!r.claimed_by) stack.appendChild(h('p', { class: 'message', 'data-boxed': true }, status('warn', t('severity.warn')), h('span', { text: t('summary.unclaimed') })));
@@ -4813,7 +4709,7 @@ function tabSummary(p, d, n) {
     stack.appendChild(h('p', { class: 'message', 'data-boxed': true }, status('ok', t('severity.ok')), h('span', { text: rows.some(rowRan) ? t('summary.allGood') : t('summary.noneFired') })));
   } else {
     stack.appendChild(h('p', { class: 'strong', text: t('summary.problems', { n: probs.length }) }));
-    const ul = h('ul', { class: 'stack' });
+    const ul = h('ul', { class: 'vstack' });
     for (const pr of probs) {
       const link = h('a', { href: hitHash(d.id, pr.event != null ? pr.event : n, pr.tab) }, t('tags.seeWhy'));
       ul.appendChild(h('li', { class: 'message' }, status(pr.tone, t('severity.' + (pr.tone === 'risk' ? 'risk' : pr.tone))),
@@ -4848,17 +4744,17 @@ function tabTags(p, d, n) {
   const tmpl = (name) => { const tg = c && c.tags.find((x) => x.name === name); return tg ? tg.template : null; };
   const rows = eventTagRows(d, n);
   const groups = [['tags.failed', ['failed', 'exception', 'timeout']], ['tags.fired', ['fired']], ['tags.skipped', ['skipped']], ['tags.notFired', ['notfired', 'notrun']]];
-  const wrap = h('div', { class: 'stack' });
+  const wrap = h('div', { class: 'vstack' });
   if (r.events.length > 1) wrap.appendChild(h('p', { class: 'note', text: t('tags.allEventsNote') }));
   for (const [title, kinds] of groups) {
     const gr = rows.filter((x) => kinds.indexOf(x.kind) >= 0);
     if (!gr.length) continue;
     wrap.appendChild(h('h3', { class: 'group-title' }, t(title), h('span', { class: 'count', text: String(gr.length) })));
     for (const row of gr) {
-      const sends = h('div', { class: 'stack' }, h('p', { class: 'section-label', text: t('tags.sendsOf') }));
+      const sends = h('div', { class: 'vstack' }, h('p', { class: 'section-label', text: t('tags.sendsOf') }));
       if (!row.sends.length) sends.appendChild(h('p', { class: 'note', text: t('tags.noSends') }));
       for (const s of row.sends) sends.appendChild(sendBlock(s, true));
-      const logs = h('div', { class: 'stack' }, h('p', { class: 'section-label', text: t('tags.logsOf') }));
+      const logs = h('div', { class: 'vstack' }, h('p', { class: 'section-label', text: t('tags.logsOf') }));
       if (!row.logs.length) logs.appendChild(h('p', { class: 'note', text: t('tags.noLogs') }));
       else logs.appendChild(codeblock(t('tab.console'), null, h('code', { text: row.logs.join('\n') }), row.logs.join('\n'), { wrap: true }));
       const det = h('details', { class: 'disclosure' },
@@ -4878,13 +4774,13 @@ function tabTriggers(p, d, n) {
   const rows = eventTagRows(d, n).filter((x) => x.trigger);
   const ev = r.events[n].event_name || '';
   const only = h('input', { type: 'checkbox', checked: L.trigOnly });
-  const wrap = h('div', { class: 'stack' }, h('p', { class: 'note', text: t('triggers.lead') }), h('label', { class: 'check' }, only, t('triggers.onlyNotFired')));
-  const list = h('div', { class: 'stack' });
+  const wrap = h('div', { class: 'vstack' }, h('p', { class: 'note', text: t('triggers.lead') }), h('label', { class: 'check' }, only, t('triggers.onlyNotFired')));
+  const list = h('div', { class: 'vstack' });
   const draw = () => {
     clear(list);
     for (const row of rows) {
       if (L.trigOnly && row.trigger.fired) continue;
-      const block = h('div', { class: 'stack gap-1' });
+      const block = h('div', { class: 'vstack gap-1' });
       block.appendChild(h('p', { class: 'status-row' }, row.trigger.fired ? status('ok', t('triggers.fired', { tag: row.tag, event: ev })) : status('muted', t('triggers.notFired', { tag: row.tag, event: ev }))));
       if (row.trigger.transformed_by && row.trigger.transformed_by.length) block.appendChild(h('p', { class: 'note' }, tn('triggers.transformedBy', { names: h('span', null, row.trigger.transformed_by.map((x, i) => [i ? ', ' : '', h('a', { href: hashFor(['transformations'], scopeQuery()) }, x)])) })));
       const conds = row.trigger.conditions || [];
@@ -4913,15 +4809,15 @@ function tabVariables(p, d, n) {
   const rows = flattenEvent(ev);
   const search = h('input', { class: 'input', type: 'search', placeholder: t('vars.search'), 'aria-label': t('vars.search'), value: L.varQ, autocomplete: 'off', spellcheck: 'false' });
   const json = JSON.stringify(ev, null, 2);
-  const wrap = h('div', { class: 'stack' },
+  const wrap = h('div', { class: 'vstack' },
     h('p', { class: 'note', text: t('vars.lead') }),
     h('div', { class: 'toolbar' }, h('div', { class: 'input-group grow' }, icon('i-search'), search), copyButton(t('vars.copyJson'), json)));
   if (flags.filter((f) => f.tone !== 'muted').length) {
     const fl = h('ul', { class: 'flag-list' });
     for (const f of flags) if (f.tone !== 'muted') fl.appendChild(h('li', { class: 'message' }, status(f.tone, t('severity.' + f.tone)), h('span', { text: f.text })));
-    wrap.appendChild(h('div', { class: 'stack gap-1' }, h('p', { class: 'section-label', text: t('vars.flags') }), fl));
+    wrap.appendChild(h('div', { class: 'vstack gap-1' }, h('p', { class: 'section-label', text: t('vars.flags') }), fl));
   }
-  const out = h('div', { class: 'stack' });
+  const out = h('div', { class: 'vstack' });
   const draw = () => {
     clear(out);
     const q = L.varQ.trim();
@@ -4966,7 +4862,7 @@ function tabVariables(p, d, n) {
 }
 function tabRequest(p, d) {
   const rq = d.request;
-  const wrap = h('div', { class: 'stack' });
+  const wrap = h('div', { class: 'vstack' });
   const curl = curlFor(d);
   wrap.appendChild(h('div', { class: 'toolbar' }, copyButton(t('req.copyCurl'), curl), h('span', { class: 'field__hint', text: t('req.curlHint') })));
   const kv = h('dl', { class: 'kv' });
@@ -5038,7 +4934,7 @@ function tabOutgoing(p, d) {
   const sends = (r && r.sends) || [];
   if (!sends.length) { p.appendChild(h('p', { class: 'note', text: t('out.none') })); return; }
   const sorted = sends.map((s, i) => [s, i]).sort((a, b) => (sendOk(a[0]) - sendOk(b[0])) || a[1] - b[1]).map((x) => x[0]);
-  const wrap = h('div', { class: 'stack' }, h('p', { class: 'note', text: t('out.lead') + (r.events.length > 1 ? ' ' + t('tags.allEventsNote') : '') }),
+  const wrap = h('div', { class: 'vstack' }, h('p', { class: 'note', text: t('out.lead') + (r.events.length > 1 ? ' ' + t('tags.allEventsNote') : '') }),
     h('p', { class: 'strong', text: t('out.count', { ok: sends.filter(sendOk).length, total: sends.length }) }));
   const list = h('div');
   for (const s of sorted) list.appendChild(sendBlock(s, false));
@@ -5065,7 +4961,7 @@ function tabConsole(p, d) {
   };
   filter.addEventListener('input', () => { L.logQ = filter.value; draw(); });
   draw();
-  p.appendChild(h('div', { class: 'stack' }, h('p', { class: 'note', text: t('console.lead') }), h('div', { class: 'input-group' }, icon('i-search'), filter), box));
+  p.appendChild(h('div', { class: 'vstack' }, h('p', { class: 'note', text: t('console.lead') }), h('div', { class: 'input-group' }, icon('i-search'), filter), box));
 }
 
 // ===== Shared view chrome =====
@@ -5203,7 +5099,7 @@ function errorRow(g, expanded) {
     clear(body);
     body.appendChild(h('p', { class: 'note', text: groupHint(g) }));
     if (msgs.length > 1 || (msgs.length === 1 && msgs[0].n < g.hits.length)) {
-      const ul = h('ul', { class: 'stack gap-1' });
+      const ul = h('ul', { class: 'vstack gap-1' });
       for (const m of msgs.slice(0, 6)) ul.appendChild(h('li', { class: 'reason' }, h('span', { class: 'count', text: fmtNum(m.n) }), ' ', code(m.text)));
       body.appendChild(ul);
     }
@@ -5287,7 +5183,7 @@ function draftBar(c, tenant) {
   if (d.broken) return h('aside', { class: 'callout' }, boxedMessage('bad', t('dr.broken')), h('div', { class: 'cluster' }, tfButton(t('dr.discard'), 'secondary', discardNow, 'i-trash')));
   const n = (d.edits || []).length;
   const box = h('aside', { class: 'callout' }, h('p', { class: 'callout__title', text: n === 1 ? t('dr.title1') : t('dr.title', { n: n }) }));
-  if ((d.edits || []).length) box.appendChild(h('ul', { class: 'stack gap-1' }, d.edits.map((e) => h('li', null, editSentence(e)))));
+  if ((d.edits || []).length) box.appendChild(h('ul', { class: 'vstack gap-1' }, d.edits.map((e) => h('li', null, editSentence(e)))));
   if (d.stale) box.appendChild(boxedMessage('warn', t('dr.stale')));
   const preview = tfButton(t('dr.preview'), 'secondary', () => { CK.live = null; go(hashFor(['checkup'], scopeQuery())); }, 'i-play');
   const publish = tfButton(t('dr.publish'), 'primary', () => publishDialog(c, tenant, refresh), 'i-check');
@@ -5300,7 +5196,7 @@ function publishDialog(c, tenant, refresh) {
   const note = h('textarea', { class: 'textarea', id: 'pub-note', rows: '3' });
   note.style.fontFamily = 'var(--font-body)';
   const form = h('form', { method: 'dialog' },
-    h('div', { class: 'dialog__body stack' }, h('h2', { class: 'dialog__title', id: 'dlg-title', text: t('dr.pubTitle') }),
+    h('div', { class: 'dialog__body vstack' }, h('h2', { class: 'dialog__title', id: 'dlg-title', text: t('dr.pubTitle') }),
       h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'pub-name', text: t('dr.pubName') }), name, h('span', { class: 'field__hint', id: 'pub-name-h', text: t('dr.pubNameHelp') })),
       h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'pub-note', text: t('dr.pubNote') }), note)),
     h('div', { class: 'dialog__actions' }, h('button', { class: 'button', 'data-variant': 'secondary', type: 'submit', value: 'cancel' }, t('action.cancel')),
@@ -5389,7 +5285,7 @@ VIEWS.checkup = {
       const mine = items.filter((i) => i.side === side).sort((a, b) => order[a.status] - order[b.status]);
       if (!mine.length) continue;
       box.appendChild(panel(t('ck.side.' + side), h('ul', { class: 'ai-list' }, mine.map((it) =>
-        h('li', null, status(ckTone(it.status), it.status === 'info' ? t('ai.sev.info') : t('severity.' + ckTone(it.status))), h('span', { class: 'stack gap-1' }, ckText(it)))))));
+        h('li', null, status(ckTone(it.status), it.status === 'info' ? t('ai.sev.info') : t('severity.' + ckTone(it.status))), h('span', { class: 'vstack gap-1' }, ckText(it)))))));
     }
     // To-do list
     if (aiOn()) {
@@ -5406,14 +5302,14 @@ VIEWS.checkup = {
       if (CK.todo) {
         if (CK.todo.summary) ai.appendChild(h('p', { text: CK.todo.summary }));
         for (const [k, label] of [['website', 'ck.todoWebsite'], ['server', 'ck.todoServer']]) {
-          if ((CK.todo[k] || []).length) { ai.appendChild(h('p', { class: 'strong', text: t(label) })); ai.appendChild(h('ol', { class: 'stack gap-1' }, CK.todo[k].map((x) => h('li', { text: x })))); }
+          if ((CK.todo[k] || []).length) { ai.appendChild(h('p', { class: 'strong', text: t(label) })); ai.appendChild(h('ol', { class: 'vstack gap-1' }, CK.todo[k].map((x) => h('li', { text: x })))); }
         }
         ai.appendChild(h('p', { class: 'meta', text: t('ai.by', { model: CK.todo.model }) }));
       }
       box.appendChild(ai);
     }
     // Live check
-    const live = h('div', { class: 'stack', id: 'ck-live' });
+    const live = h('div', { class: 'vstack', id: 'ck-live' });
     box.appendChild(panel(t('ck.live'), live));
     this.renderLive();
     // Site settings
@@ -5426,7 +5322,7 @@ VIEWS.checkup = {
       try { await api('PUT', '/admin/api/checkup/config' + this.q(), { site_url: site.value, gtm_id: gtm.value, public_url: pub.value }); CK.todo = null; this.load(true); }
       catch (e) { toast('bad', e.raw || e.message); }
     });
-    box.appendChild(panel(t('ck.settings'), h('div', { class: 'stack' }, siteF, gtmF, pubF, h('div', { class: 'cluster' }, save))));
+    box.appendChild(panel(t('ck.settings'), h('div', { class: 'vstack' }, siteF, gtmF, pubF, h('div', { class: 'cluster' }, save))));
   },
   renderLive() {
     const live = document.getElementById('ck-live');
@@ -5471,7 +5367,7 @@ VIEWS.checkup = {
       const tone = (st) => st === 'pass' ? 'ok' : st === 'warn' ? 'warn' : 'bad';
       const ul = h('ul', { class: 'ai-list' });
       for (const r of vd.tags) {
-        const col = h('span', { class: 'stack gap-1' }, h('span', { class: 'strong', text: r.tag }));
+        const col = h('span', { class: 'vstack gap-1' }, h('span', { class: 'strong', text: r.tag }));
         if ((r.problems || []).length) col.appendChild(h('span', { text: r.problems.map((p) => t('ck.p.' + p)).join('; ') }));
         if (r.why && r.status === 'fail') col.appendChild(code(r.why));
         ul.appendChild(h('li', null, status(tone(r.status), r.status === 'pass' ? t('ck.vPass') : t('severity.' + tone(r.status))), col));
@@ -5489,7 +5385,7 @@ VIEWS.checkup = {
           if (ev.has[k]) chips.appendChild(h('span', { class: 'tag', 'data-variant': 'plain', text: t('ck.has.' + k) }));
         }
         const tags = h('span', { class: 'status-row' }, (ev.tags || []).map((x) => status(x.outcome === 'success' ? 'ok' : x.outcome === 'skipped' ? 'muted' : 'bad', x.tag)));
-        ul.appendChild(h('li', null, h('span', { class: 'meta', text: clock(hit.at) }), h('span', { class: 'stack gap-1' },
+        ul.appendChild(h('li', null, h('span', { class: 'meta', text: clock(hit.at) }), h('span', { class: 'vstack gap-1' },
           h('span', { class: 'cluster' }, h('a', { href: hitHash(hit.trace), class: 'strong', text: ev.name || '' }), chips),
           tags, hit.sends_failed ? h('span', { class: 'note', text: t('ck.sendsFailed', { failed: hit.sends_failed, sends: hit.sends }) }) : null)));
       }
@@ -5545,16 +5441,16 @@ VIEWS.setup = {
           kv.appendChild(h('dd', null, shown));
         }
         const fw = tg.fire_when && tg.fire_when.length ? tg.fire_when.map((cd, i) => [i ? ' ' + t('container.and') + ' ' : '', code(cd.key), ' ' + t('op.' + cd.op) + ' ', code(cd.value)]) : t('su.always');
-        tags.appendChild(h('li', null, h('span', { class: 'stack gap-1' },
+        tags.appendChild(h('li', null, h('span', { class: 'vstack gap-1' },
           h('span', { class: 'cluster' }, h('span', { class: 'strong', text: tg.name }), h('span', { class: 'tag', 'data-variant': 'plain', text: tg.template }), tg.enabled === false ? status('muted', t('tf.off')) : null),
           h('span', { class: 'reason' }, t('su.fires'), ': ', fw), Object.keys(tg.data || {}).length ? kv : null)));
       }
       box.appendChild(panel(t('su.tags'), tags));
-      if ((p.transformations || []).length) box.appendChild(panel(t('su.rules'), h('div', { class: 'stack' }, p.transformations.map((r) => h('div', { class: 'stack gap-1' }, h('span', { class: 'strong', text: r.name }), tfRuleBody(r))))));
+      if ((p.transformations || []).length) box.appendChild(panel(t('su.rules'), h('div', { class: 'vstack' }, p.transformations.map((r) => h('div', { class: 'vstack gap-1' }, h('span', { class: 'strong', text: r.name }), tfRuleBody(r))))));
       const needs = v.needs || [];
-      box.appendChild(panel(t('su.needs'), needs.length ? h('ul', { class: 'stack gap-1' }, needs.map((n) => h('li', null, h('strong', { text: n.tag }), ': ' + n.label, n.secret ? [' ', h('span', { class: 'tag', 'data-variant': 'plain', text: t('su.secret') })] : null))) : h('p', { class: 'note', text: t('su.needsNone') })));
+      box.appendChild(panel(t('su.needs'), needs.length ? h('ul', { class: 'vstack gap-1' }, needs.map((n) => h('li', null, h('strong', { text: n.tag }), ': ' + n.label, n.secret ? [' ', h('span', { class: 'tag', 'data-variant': 'plain', text: t('su.secret') })] : null))) : h('p', { class: 'note', text: t('su.needsNone') })));
     }
-    if ((v.web_steps || []).length) box.appendChild(panel(t('su.web'), h('ol', { class: 'stack gap-1' }, v.web_steps.map((x) => h('li', { text: x })))));
+    if ((v.web_steps || []).length) box.appendChild(panel(t('su.web'), h('ol', { class: 'vstack gap-1' }, v.web_steps.map((x) => h('li', { text: x })))));
     if (p) {
       const apply = tfButton(t('su.apply'), 'primary', async () => {
         apply.disabled = true;
@@ -5596,8 +5492,8 @@ function editSentence(e) {
 function changeDialog(chk, confirmLabel) {
   return new Promise((resolve) => {
     const rp = chk.replay || {};
-    const body = h('div', { class: 'dialog__body stack' }, h('h2', { class: 'dialog__title', id: 'dlg-title', text: t('chk.title') }));
-    if ((chk.edits || []).length) body.appendChild(h('ul', { class: 'stack gap-1' }, chk.edits.map((e) => h('li', null, editSentence(e)))));
+    const body = h('div', { class: 'dialog__body vstack' }, h('h2', { class: 'dialog__title', id: 'dlg-title', text: t('chk.title') }));
+    if ((chk.edits || []).length) body.appendChild(h('ul', { class: 'vstack gap-1' }, chk.edits.map((e) => h('li', null, editSentence(e)))));
     if (rp.error) body.appendChild(boxedMessage('warn', t('chk.replayError', { message: rp.error })));
     else body.appendChild(h('p', { class: 'strong', text: t('chk.summary', { hits: fmtNum(rp.hits), changed: fmtNum(rp.changed_hits) }) }));
     if ((rp.pinned_changed || []).length) body.appendChild(boxedMessage('warn', t('chk.pinned', { names: rp.pinned_changed.join(', ') })));
@@ -5606,7 +5502,7 @@ function changeDialog(chk, confirmLabel) {
         const ex = g.example || {};
         const example = ex.trace != null ? '#' + ex.trace : (ex.pinned || '');
         return h('li', null, status(g.kind === 'stops' || g.kind === 'param_removed' ? 'warn' : 'info', g.kind === 'stops' || g.kind === 'param_removed' ? t('severity.warn') : t('ai.sev.info')),
-          h('span', { class: 'stack gap-1' }, h('span', null, chgSentence(g)), h('span', { class: 'meta', text: g.hits === 1 ? t('chk.hit', { example: example }) : t('chk.hits', { n: fmtNum(g.hits), example: example }) })));
+          h('span', { class: 'vstack gap-1' }, h('span', null, chgSentence(g)), h('span', { class: 'meta', text: g.hits === 1 ? t('chk.hit', { example: example }) : t('chk.hits', { n: fmtNum(g.hits), example: example }) })));
       })));
       if (rp.more_groups) body.appendChild(h('p', { class: 'note', text: t('chg.more', { n: fmtNum(rp.more_groups) }) }));
     }
@@ -5619,7 +5515,7 @@ function changeDialog(chk, confirmLabel) {
         const tone = v.verdict === 'fine' ? 'ok' : v.verdict === 'risky' ? 'bad' : 'warn';
         box.appendChild(h('div', { class: 'ai-box__head' }, icon('i-spark'), h('span', { class: 'strong', text: t('chk.aiTitle') }), status(tone, t('chk.verdict.' + v.verdict))));
         if (v.summary) box.appendChild(h('p', { text: v.summary }));
-        if ((v.concerns || []).length) box.appendChild(h('ul', { class: 'stack gap-1' }, v.concerns.map((c) => h('li', { text: c }))));
+        if ((v.concerns || []).length) box.appendChild(h('ul', { class: 'vstack gap-1' }, v.concerns.map((c) => h('li', { text: c }))));
         if (v.verdict === 'risky') ok.setAttribute('data-variant', 'danger');
       }, (e) => { clear(box).appendChild(boxedMessage('warn', errNode(e))); });
     }
@@ -5646,7 +5542,7 @@ function pinButton(d) {
     const ev = (d.result && d.result.events[0] && d.result.events[0].event_name) || '';
     input.value = ev ? ev + ' #' + d.id : '#' + d.id;
     const form = h('form', { method: 'dialog' },
-      h('div', { class: 'dialog__body stack' }, h('h2', { class: 'dialog__title', id: 'dlg-title', text: t('pin.button') }),
+      h('div', { class: 'dialog__body vstack' }, h('h2', { class: 'dialog__title', id: 'dlg-title', text: t('pin.button') }),
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'pin-label', text: t('pin.label') }), input, h('span', { class: 'field__hint', id: 'pin-h', text: t('pin.labelHelp') }))),
       h('div', { class: 'dialog__actions' }, h('button', { class: 'button', 'data-variant': 'secondary', type: 'submit', value: 'cancel' }, t('action.cancel')),
         h('button', { class: 'button', 'data-variant': 'primary', type: 'submit', value: 'ok' }, t('pin.button'))));
@@ -5684,20 +5580,20 @@ VIEWS.history = {
       const acts = h('span', { class: 'cluster' });
       if (e.undoable && HI.data.editable) acts.appendChild(tfButton(t('hist.undo'), 'secondary', () => this.undo(e)));
       list.appendChild(h('li', null, h('span', { class: 'tag', 'data-variant': 'plain', text: t('hist.source.' + e.source) }),
-        h('span', { class: 'stack gap-1' }, h('span', { class: 'meta', text: stamp(e.at) }),
+        h('span', { class: 'vstack gap-1' }, h('span', { class: 'meta', text: stamp(e.at) }),
           e.name ? h('span', { class: 'strong', text: e.name }) : null, e.note ? h('span', { class: 'note', text: e.note }) : null,
           (e.edits || []).map((x) => h('span', null, editSentence(x))), acts.childNodes.length ? acts : null)));
     }
     box.appendChild(panel(t('hist.title'), HI.data.entries.length ? list : h('p', { class: 'note', text: t('hist.empty') })));
     const pins = h('ul', { class: 'ai-list' });
     for (const p of HI.pinned || []) {
-      pins.appendChild(h('li', null, h('span', { class: 'stack gap-1' }, h('span', { class: 'strong', text: p.label }),
+      pins.appendChild(h('li', null, h('span', { class: 'vstack gap-1' }, h('span', { class: 'strong', text: p.label }),
         h('span', { class: 'meta', text: (p.events || []).join(', ') + ' · ' + stamp(p.at) + (p.tenant ? ' · ' + p.tenant : '') }),
         h('span', { class: 'cluster' }, tfButton(t('pin.remove'), 'ghost', async () => {
           try { const r = await api('DELETE', '/admin/api/pinned/' + encodeURIComponent(p.id)); HI.pinned = r.pinned || []; this.render(); } catch (e) { toast('bad', e.raw || e.message); }
         }, 'i-trash')))));
     }
-    box.appendChild(panel(t('pin.title'), h('div', { class: 'stack' }, h('p', { class: 'note', text: t('pin.lead') }), (HI.pinned || []).length ? pins : h('p', { class: 'note', text: t('pin.empty') }))));
+    box.appendChild(panel(t('pin.title'), h('div', { class: 'vstack' }, h('p', { class: 'note', text: t('pin.lead') }), (HI.pinned || []).length ? pins : h('p', { class: 'note', text: t('pin.empty') }))));
   },
   async undo(e) {
     const key = containerKey('');
@@ -5721,7 +5617,7 @@ const AL = { box: null, data: null, error: null, busy: false };
 function alertItem(a) {
   const txt = (a.texts && (a.texts[LANG] || a.texts.en)) || {};
   const tone = a.resolved_at ? 'ok' : a.severity === 'problem' ? 'bad' : 'warn';
-  const col = h('span', { class: 'stack gap-1' },
+  const col = h('span', { class: 'vstack gap-1' },
     h('span', { class: 'cluster' }, h('span', { class: 'strong', text: txt.title || a.subject }), a.site ? h('span', { class: 'tag', 'data-variant': 'plain', text: a.site }) : null,
       h('span', { class: 'meta', text: a.resolved_at ? t('al.resolvedAt', { time: stamp(a.resolved_at) }) : t('al.since', { time: stamp(a.started_at) }) })),
     txt.text ? h('span', { text: txt.text }) : null);
@@ -5757,7 +5653,7 @@ VIEWS.alerts = {
     const v = AL.data;
     if (!v) { box.appendChild(skeleton()); return; }
     const lc = v.last_check;
-    const st = h('div', { class: 'stack gap-1' });
+    const st = h('div', { class: 'vstack gap-1' });
     st.appendChild(h('p', { class: 'meta', text: lc && lc.at ? t('al.lastCheck', { time: stamp(lc.at), open: fmtNum(lc.open || 0) }) : t('al.never') }));
     if (lc && (lc.learning || []).length) st.appendChild(h('p', { class: 'note', text: t('al.learning', { sites: lc.learning.map((s) => s || t('overview.mode.single')).join(', ') }) }));
     st.appendChild(h('p', { class: 'note', text: v.slack ? t('al.slackOn') : t('al.slackOff') }));
@@ -5778,7 +5674,7 @@ VIEWS.alerts = {
     const test = v.slack ? tfButton(t('al.test'), 'secondary', async () => {
       try { await api('POST', '/admin/api/alerts/test'); toast('ok', t('al.testSent')); } catch (e) { toast('bad', e.raw || e.message); }
     }) : null;
-    box.appendChild(panel(t('al.settings'), h('div', { class: 'stack' },
+    box.appendChild(panel(t('al.settings'), h('div', { class: 'vstack' },
       h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'al-keys', text: t('al.keyEvents') }), keys, h('span', { class: 'field__hint', id: 'al-keys-h', text: t('al.keyEventsHelp') })),
       h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'al-lang', text: t('al.language') }), lang),
       h('div', { class: 'cluster' }, save, test))));
@@ -5810,12 +5706,12 @@ function tfRuleBody(r) {
     ? h('p', { class: 'reason' }, t('tf.when'), ': ', r.when.map((c, i) => [i ? ' ' + t('container.and') + ' ' : '', code(c.key), ' ' + t('op.' + c.op) + ' ', code(c.value)]))
     : h('p', { class: 'reason', text: t('tf.always') });
   const tags = r.tags && r.tags.length ? h('p', { class: 'reason' }, t('tf.tags'), ': ', r.tags.map((x, i) => [i ? ', ' : '', h('strong', { text: x })])) : h('p', { class: 'reason', text: t('tf.tagsAll') });
-  return h('div', { class: 'stack gap-1' }, when, tags, h('ol', { class: 'stack gap-1' }, (r.steps || []).map((s) => h('li', null, tfStep(s)))));
+  return h('div', { class: 'vstack gap-1' }, when, tags, h('ol', { class: 'vstack gap-1' }, (r.steps || []).map((s) => h('li', null, tfStep(s)))));
 }
 function tfPreview(p) {
   if (!p) return null;
   if (!p.events) return h('p', { class: 'note', text: t('tf.preview.none') });
-  const box = h('div', { class: 'stack gap-1' }, h('p', { class: 'strong', text: t('tf.preview', { matched: fmtNum(p.matched), events: fmtNum(p.events), changed: fmtNum(p.changed) }) }));
+  const box = h('div', { class: 'vstack gap-1' }, h('p', { class: 'strong', text: t('tf.preview', { matched: fmtNum(p.matched), events: fmtNum(p.events), changed: fmtNum(p.changed) }) }));
   const K = t('tf.preview.key'), B = t('tf.preview.before'), A = t('tf.preview.after');
   const val = (v) => v == null ? h('span', { class: 'muted', text: t('tf.preview.absent') }) : typeof v === 'string' ? v : JSON.stringify(v);
   for (const sm of p.samples || []) {
@@ -5880,7 +5776,7 @@ VIEWS.transformations = {
         tfButton(t('tf.delete'), 'ghost', async () => {
           if (await confirmDialog({ title: t('tf.delete.title', { name: r.name }), body: t('tf.delete.body'), confirm: t('tf.delete'), danger: true })) this.save(rules.filter((_, j) => j !== i));
         }, 'i-trash')) : null;
-      box.appendChild(panel(r.name, h('div', { class: 'stack' }, tfRuleBody(r), acts),
+      box.appendChild(panel(r.name, h('div', { class: 'vstack' }, tfRuleBody(r), acts),
         h('span', { class: 'ml-auto' }, r.enabled === false ? status('muted', t('tf.off')) : status('ok', t('tf.on')))));
     });
     if (editable && !TF.editing) box.appendChild(h('div', { class: 'cluster' }, tfButton(t('tf.add'), 'secondary', () => {
@@ -5907,7 +5803,7 @@ VIEWS.transformations = {
       this.save(l, () => { TF.editing = null; });
     });
     const cancel = tfButton(t('tf.editor.cancel'), 'ghost', () => { TF.editing = null; this.render(); });
-    const body = h('div', { class: 'stack' },
+    const body = h('div', { class: 'vstack' },
       h('div', { class: 'field' }, ta, h('span', { class: 'field__hint', id: 'tf-json-h', text: t('tf.editor.help') })),
       ed.error ? boxedMessage('bad', ed.error) : null,
       tfPreview(ed.preview),
@@ -5978,7 +5874,7 @@ function aiFinding(f, tenant, extra) {
   }
   if (f.tag) acts.appendChild(h('a', { class: 'button', 'data-variant': 'ghost', 'data-size': 'sm', href: hashFor(['container', 'tag', f.tag], scopeQuery()) }, t('ai.openTag')));
   return h('li', null, status(aiSevTone(f.severity), aiSevWord(f.severity)),
-    h('span', { class: 'stack gap-1' },
+    h('span', { class: 'vstack gap-1' },
       h('span', { class: 'cluster' }, h('span', { class: 'strong', text: f.title }), extra || null),
       f.detail ? h('span', { text: f.detail }) : null,
       f.fix ? h('span', null, h('span', { class: 'strong', text: t('ai.fix') + ' ' }), f.fix) : null,
@@ -6176,7 +6072,7 @@ VIEWS.overview = {
     box.appendChild(kpis);
     if (small) box.appendChild(h('p', { class: 'note', text: t('kpi.small') }));
     // Tallies: what should equal what
-    const tal = h('div', { class: 'stack' });
+    const tal = h('div', { class: 'vstack' });
     if (sendsTried) tal.appendChild(tallyBlock(t('tally.sends'), sendsTried, sd.ok, t('tally.sendsLine', { tried: sendsTried, ok: sd.ok })));
     else tal.appendChild(h('p', { class: 'note', text: t('kpi.noSends') }));
     if (total) tal.appendChild(tallyBlock(t('tally.hits'), total, total - req.unclaimed, t('tally.hitsLine', { total: total, claimed: total - req.unclaimed })));
@@ -6192,14 +6088,14 @@ VIEWS.overview = {
       const c = { ok: 0, error: 0, unclaimed: 0, refused: 0 };
       const runs = { success: 0, failure: 0, exception: 0, timeout: 0, skipped: 0 };
       for (const id of ids) { const s = S.traces.get(id); c[hitKind(s)]++; for (const r of s.tag_runs || []) runs[r.outcome] = (runs[r.outcome] || 0) + 1; }
-      const sb = h('div', { class: 'stack' },
+      const sb = h('div', { class: 'vstack' },
         minibars([['bad', t('hits.error'), c.error], ['warn', t('hits.unclaimed'), c.unclaimed], ['risk', t('hits.refused'), c.refused], ['ok', t('hits.ok'), c.ok]]),
         h('p', { class: 'section-label', text: t('overview.tagOutcomes', { n: ids.length }) }),
         minibars([['bad', t('outcome.failed'), runs.failure], ['risk', t('outcome.exception'), runs.exception], ['warn', t('outcome.timedOut'), runs.timeout], ['ok', t('outcome.succeeded'), runs.success]]),
         h('p', { class: 'meta', text: sampleNote(ids) }));
       grid.appendChild(panel(t('overview.sample', { n: ids.length }), sb, h('a', { class: 'ml-auto', href: hashFor(['live'], liveQuery()) }, t('keys.live'))));
       const groups = errorGroups(ids).slice(0, 3);
-      const te = h('div', { class: 'stack' });
+      const te = h('div', { class: 'vstack' });
       if (!groups.length) te.appendChild(boxedMessage('ok', ids.length ? t('errors.empty', { n: ids.length }) : t('errors.noHits')));
       for (const g of groups) {
         te.appendChild(h('div', { class: 'err-row' },
@@ -6231,7 +6127,7 @@ VIEWS.overview = {
     if (o.ai) grid.appendChild(aiUsagePanel(o.ai));
     const bs = req.by_status || {};
     const stRows = [['ok', '2xx', bs['2xx'] || 0], ['muted', '3xx', bs['3xx'] || 0, 'i-arrow'], ['warn', '4xx', bs['4xx'] || 0], ['bad', '5xx', bs['5xx'] || 0]];
-    grid.appendChild(panel(t('overview.status'), h('div', { class: 'stack' }, minibars(stRows),
+    grid.appendChild(panel(t('overview.status'), h('div', { class: 'vstack' }, minibars(stRows),
       h('p', { class: 'note', text: ['2xx', '3xx', '4xx', '5xx'].map((k) => k + ': ' + t('kpi.status' + k + '.help')).join(' ') }))));
     box.appendChild(grid);
     // Sites table
@@ -6278,7 +6174,7 @@ function permList(perms) {
   if (perms == null) return h('span', { class: 'muted', text: t('container.trusted') });
   const keys = Object.keys(perms);
   if (!keys.length) return h('span', { class: 'muted', text: t('container.noPermissions') });
-  return h('ul', { class: 'stack gap-1' }, keys.map((k) => {
+  return h('ul', { class: 'vstack gap-1' }, keys.map((k) => {
     const v = perms[k];
     const vals = v && typeof v === 'object' ? Object.keys(v).map((kk) => Array.isArray(v[kk]) ? v[kk].join(', ') : typeof v[kk] === 'object' ? JSON.stringify(v[kk]) : String(v[kk])).filter(Boolean) : [];
     return h('li', null, code(k), vals.length ? ': ' + vals.join(' · ') : '');
@@ -6317,7 +6213,7 @@ function conflictMessage(withHelp) {
   const b = h('button', { class: 'button', 'data-variant': 'secondary', 'data-size': 'sm', type: 'button', 'data-act': 'reload' }, icon('i-refresh', { class: 'icon button__icon' }), t('ed.conflict.reload'));
   b.addEventListener('click', reloadContainer);
   return h('div', { class: 'message', 'data-boxed': true, role: 'alert' }, status('warn', t('severity.warn')),
-    h('span', { class: 'stack gap-1' }, h('span', { text: t('ed.conflict') + (withHelp ? ' ' + t('ed.conflict.help') : '') }), h('span', null, b)));
+    h('span', { class: 'vstack gap-1' }, h('span', { text: t('ed.conflict') + (withHelp ? ' ' + t('ed.conflict.help') : '') }), h('span', null, b)));
 }
 function readonlyNote(c) {
   return h('aside', { class: 'callout' }, h('p', { class: 'callout__title', text: t('ed.readonly.title') }),
@@ -6450,7 +6346,7 @@ VIEWS.container = {
       td(CL, S.cap ? t('container.claimed', { n: claimed[cl.name] || 0, total: ids.length }) : '—'), td(DA, dataKv(cl.data)))), { stack: true }) : h('p', { class: 'note', text: t('clients.none') });
     box.appendChild(panel(t('clients.title'), [h('p', { class: 'note', text: t('clients.lead') }), clientBody]));
     // Tags
-    const tagsBox = h('div', { class: 'stack' });
+    const tagsBox = h('div', { class: 'vstack' });
     if (!c.tags.length) tagsBox.appendChild(h('p', { class: 'note', text: t('container.noTags') }));
     else if (c.editable) tagsBox.appendChild(h('p', { class: 'note', text: t('ed.order') }));
     const focusTag = S.route.parts[1] === 'tag' ? S.route.parts[2] : null;
@@ -6472,7 +6368,7 @@ VIEWS.container = {
       const K = t('triggers.col.key'), OP = t('triggers.col.op'), V = t('triggers.col.value');
       const dkey = tg.source === 'integration' ? 'integration:' + tg.name : tg.name;
       const det = h('details', { class: 'disclosure', 'data-tag': dkey, id: 'tag-' + hashKey(dkey), open: openTags.has(dkey) || (focusTag === tg.name && dkey === tg.name) ? true : null },
-        h('summary', null, h('span', { class: 'disclosure__title stack gap-1' },
+        h('summary', null, h('span', { class: 'disclosure__title vstack gap-1' },
           h('span', { class: 'cluster' }, h('strong', { text: tg.name }), h('span', { class: 'tag', text: tg.template }), off ? status('muted', t('ed.off')) : null),
           ruleSentence(tg.fire_when), S.cap ? h('span', { class: 'cluster' }, h('span', { class: 'meta', text: t('container.counts', { n: ids.length }) + ':' }), counts) : null), icon('i-chevron', { class: 'disclosure__icon' })),
         h('div', { class: 'disclosure__body' },
@@ -6582,14 +6478,14 @@ VIEWS.container = {
     const title = orig ? t('ed.editTitle', { name: orig.name }) : t('ed.new');
     box.appendChild(h('div', { class: 'cluster' }, back));
     // Not inside .view-head: the editor's own title stays visible beside the top bar's view name.
-    box.appendChild(h('div', { class: 'stack gap-1' }, h('h2', { class: 'view-title', id: 'ed-title', tabindex: '-1', text: title }),
+    box.appendChild(h('div', { class: 'vstack gap-1' }, h('h2', { class: 'view-title', id: 'ed-title', tabindex: '-1', text: title }),
       h('p', { class: 'note', text: t('ed.lead') })));
-    const stop = (node) => { box.appendChild(h('div', { id: 'ed-static', class: 'stack' }, node)); };
+    const stop = (node) => { box.appendChild(h('div', { id: 'ed-static', class: 'vstack' }, node)); };
     if (!c.editable) { stop(readonlyNote(c)); return; }
     if (mode.kind === 'edit' && !orig) {
       const rl = h('button', { class: 'button', 'data-variant': 'secondary', 'data-size': 'sm', type: 'button' }, icon('i-refresh', { class: 'icon button__icon' }), t('ed.conflict.reload'));
       rl.addEventListener('click', reloadContainer);
-      stop(h('div', { class: 'message', 'data-boxed': true }, status('warn', t('severity.warn')), h('span', { class: 'stack gap-1' }, h('span', { text: t('ed.gone') }), h('span', null, rl))));
+      stop(h('div', { class: 'message', 'data-boxed': true }, status('warn', t('severity.warn')), h('span', { class: 'vstack gap-1' }, h('span', { text: t('ed.gone') }), h('span', null, rl))));
       return;
     }
     if (orig && !tagEditable(c, orig)) { stop(h('p', { class: 'note' }, t('ed.integrationTag'), ' ', h('a', { href: '#integrations' }, t('ed.integrationLink')))); return; }
@@ -6767,7 +6663,7 @@ VIEWS.container = {
 
     // --- Test against recent hits
     const testBtn = h('button', { class: 'button', 'data-variant': 'secondary', type: 'button' }, icon('i-search', { class: 'icon button__icon' }), t('ed.test'));
-    const testOut = h('div', { class: 'stack', 'aria-live': 'polite' });
+    const testOut = h('div', { class: 'vstack', 'aria-live': 'polite' });
     const staleNote = h('p', { class: 'message', hidden: true }, status('muted', t('severity.warn')), h('span', { text: t('ed.test.stale') }));
     let testSig = null;
     const condSig = () => JSON.stringify(conds.map((r) => [r.keyIn.value.trim(), r.opSel.value, r.valIn.value]));
@@ -6800,21 +6696,21 @@ VIEWS.container = {
     });
 
     // --- Form
-    const formMsg = h('div', { class: 'stack gap-1', id: 'ed-msg', tabindex: '-1', 'aria-live': 'polite' });
+    const formMsg = h('div', { class: 'vstack gap-1', id: 'ed-msg', tabindex: '-1', 'aria-live': 'polite' });
     const save = h('button', { class: 'button', 'data-variant': 'primary', type: 'submit' }, t('ed.save'));
     const cancel = h('a', { class: 'button', 'data-variant': 'secondary', href: backHref }, t('ed.cancel'));
     guard(cancel);
     const group = (id, title, lead, kids) => h('section', { class: 'panel', 'aria-labelledby': id },
       h('div', { class: 'panel__head' }, h('h3', { class: 'panel__title', id: id, text: title })),
-      h('div', { class: 'panel__body stack' }, lead ? h('p', { class: 'note', text: lead }) : null, kids));
-    const form = h('form', { class: 'stack', id: 'ed-form', novalidate: true, 'aria-labelledby': 'ed-title' },
+      h('div', { class: 'panel__body vstack' }, lead ? h('p', { class: 'note', text: lead }) : null, kids));
+    const form = h('form', { class: 'vstack', id: 'ed-form', novalidate: true, 'aria-labelledby': 'ed-title' },
       h('datalist', { id: 'ed-keys' }), h('datalist', { id: 'ed-evnames' }),
       group('ed-g-tag', t('ed.section.tag'), null, [
         h('div', { class: 'form-grid' }, fld('ed-name', t('ed.f.name'), nameIn, t('ed.f.name.help')), fld('ed-tpl', t('ed.f.template'), tplSel, t('ed.f.template.help'))),
         en.el, strip.el]),
       group('ed-g-set', t('ed.settings'), t('ed.settings.lead'), [settingsNone, settingsList, h('div', { class: 'form-actions' }, addSetting)]),
       group('ed-g-cond', t('ed.conditions'), t('ed.conditions.lead'), [condNone, condList, h('div', { class: 'form-actions' }, addCond),
-        h('div', { class: 'stack', role: 'group', 'aria-label': t('ed.test') }, h('p', { class: 'note', text: t('ed.test.lead') }), h('div', { class: 'form-actions' }, testBtn), staleNote, testOut)]),
+        h('div', { class: 'vstack', role: 'group', 'aria-label': t('ed.test') }, h('p', { class: 'note', text: t('ed.test.lead') }), h('div', { class: 'form-actions' }, testBtn), staleNote, testOut)]),
       formMsg,
       h('div', { class: 'form-actions' }, save, cancel));
     for (const [k, v] of Object.entries((init && init.data) || {})) if (!(init.template === 'ga4_tag' && k === 'stripUserData')) settingRow(k, v);
@@ -6988,7 +6884,7 @@ VIEWS.sites = {
       h('div', { class: 'panel__head' }, h('h3', { class: 'panel__title', text: tt.name || tt.id }), code(tt.id),
         tt.enabled ? status('ok', t('sites.on')) : status('muted', t('sites.off')),
         h('span', { class: 'tag', 'data-variant': tt.origin_check === 'enforce' ? null : 'plain', text: t('sites.originBadge', { mode: tt.origin_check }) })),
-      h('div', { class: 'panel__body stack' }, kv, stats,
+      h('div', { class: 'panel__body vstack' }, kv, stats,
         h('div', { class: 'form-actions' }, h('a', { class: 'button', 'data-variant': 'secondary', 'data-size': 'sm', href: '#sites/' + encodeURIComponent(tt.id) }, t('sites.editBtn')), toggle, del,
           h('a', { class: 'ml-auto', href: hashFor(['live'], new URLSearchParams({ tenant: tt.id })) }, t('sites.seeHits')))));
   },
@@ -7015,7 +6911,7 @@ VIEWS.sites = {
     const formMsg = h('p', { class: 'message', 'aria-live': 'polite' });
     const form = h('form', { class: 'panel', novalidate: true, 'aria-labelledby': 'sf-title' },
       h('div', { class: 'panel__head' }, h('h3', { class: 'panel__title', id: 'sf-title', text: tt ? t('sites.edit', { name: tt.name || tt.id }) : t('sites.new') })),
-      h('div', { class: 'panel__body stack' },
+      h('div', { class: 'panel__body vstack' },
         h('div', { class: 'form-grid' },
           fld('sf-id', t('sites.f.id') + req, t('sites.f.id.help'), fId), fld('sf-name', t('sites.f.name'), t('sites.f.name.help'), fName),
           fld('sf-hosts', t('sites.f.hosts') + req, t('sites.f.hosts.help'), fHosts), fld('sf-mids', t('sites.f.mids') + req, t('sites.f.mids.help'), fMids),
@@ -7159,7 +7055,7 @@ VIEWS.features = {
     if (!shown.length) box.appendChild(emptyState(t('ft.none'), null));
   },
   open(ft, c, tenant) {
-    const body = h('div', { class: 'dialog__body stack' },
+    const body = h('div', { class: 'dialog__body vstack' },
       h('h2', { class: 'dialog__title', id: 'dlg-title' }, t('ft.' + ft.key + '.name'), ' ', status(ft.state.tone, ft.state.word)),
       h('p', { text: t('ft.' + ft.key + '.line') }),
       h('p', { class: 'callout__title', text: t('ft.how') }),
@@ -7204,7 +7100,7 @@ VIEWS.features = {
   },
   // The fields for one feature; read() returns every feature with these changed.
   editor(key, f) {
-    const el = h('div', { class: 'stack' });
+    const el = h('div', { class: 'vstack' });
     const next = () => JSON.parse(JSON.stringify(f));
     if (key === 'cookies') {
       // Google Analytics, Meta and TikTok are kept by default (the client's
@@ -7303,7 +7199,7 @@ VIEWS.integrations = {
   },
   provider(p, testEvents) {
     const inputs = {};
-    const body = h('div', { class: 'panel__body stack' }, h('p', { class: 'note', text: strOr('int.' + p.id + '.help', p.help) }));
+    const body = h('div', { class: 'panel__body vstack' }, h('p', { class: 'note', text: strOr('int.' + p.id + '.help', p.help) }));
     const testOn = p.fields.some((f) => (f.key === 'test_event_code' && f.value) || (f.kind === 'toggle' && f.key === 'test_mode' && f.value === 'true'));
     for (const f of p.fields) {
       const id = 'int-' + p.id + '-' + f.key;
@@ -7368,7 +7264,7 @@ VIEWS.integrations = {
       ? h('input', { class: 'input', 'data-mono': true, type: 'text', autocomplete: 'off', placeholder: t('int.test.code'), 'aria-label': t('int.test.code') }) : null;
     const mode = keys.indexOf('test_mode') >= 0 ? h('input', { type: 'checkbox', checked: true }) : null;
     const go = h('button', { class: 'button', 'data-variant': 'secondary', type: 'button' }, t('int.test.send'));
-    const out = h('div', { class: 'stack', 'aria-live': 'polite' });
+    const out = h('div', { class: 'vstack', 'aria-live': 'polite' });
     go.addEventListener('click', async () => {
       go.disabled = true;
       clear(out).appendChild(h('p', { class: 'note', text: t('int.test.sending') }));
@@ -7383,7 +7279,7 @@ VIEWS.integrations = {
       }
       go.disabled = false;
     });
-    return h('div', { class: 'stack test-box' },
+    return h('div', { class: 'vstack test-box' },
       h('p', { class: 'panel__title', text: t('int.test.title') }), h('p', { class: 'note', text: hint }),
       h('div', { class: 'cluster' }, ev, code, mode ? h('label', { class: 'check' }, mode, ' ', t('int.test.mode')) : null, go), out);
   },
@@ -7393,7 +7289,7 @@ VIEWS.integrations = {
       status(tone(tg.outcome), tg.tag + ': ' + tg.outcome + (tg.skip ? ' (' + tg.skip + ')' : '') + (tg.error ? ' (' + tg.error + ')' : ''))));
     const sends = e.sends.map((sd) => h('pre', { class: 'mono note', text: sd.from + ' → ' + sd.method + ' ' + sd.url + ' → '
       + (sd.result.Ok != null ? sd.result.Ok : 'error ' + sd.result.Err) + (sd.response ? '\n' + sd.response : '') }));
-    return h('div', { class: 'stack' }, tags, e.client_error ? boxedMessage('bad', e.client_error) : null,
+    return h('div', { class: 'vstack' }, tags, e.client_error ? boxedMessage('bad', e.client_error) : null,
       sends.length || e.logs.length ? h('details', null, h('summary', { text: t('int.test.detail', { sends: e.sends.length, logs: e.logs.length }) }),
         ...sends, ...e.logs.map((l) => h('pre', { class: 'mono note', text: l }))) : null);
   },
@@ -7409,7 +7305,7 @@ VIEWS.integrations = {
     const save = h('button', { class: 'button', 'data-variant': 'primary', type: 'submit' }, t('enr.save'));
     const form = h('form', { class: 'panel', id: 'int-enrichment', novalidate: true, 'aria-label': t('enr.title') },
       h('div', { class: 'panel__head' }, h('h3', { class: 'panel__title', text: t('enr.title') }), e.enabled || e.event_user_data ? status('ok', t('int.on')) : status('muted', t('int.off'))),
-      h('div', { class: 'panel__body stack' }, h('p', { class: 'note', text: t('enr.lead') }), eud.el,
+      h('div', { class: 'panel__body vstack' }, h('p', { class: 'note', text: t('enr.lead') }), eud.el,
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'enr-url', text: t('enr.url') }), url, h('span', { class: 'field__hint', id: 'enr-url-h' }, t('enr.url.help'), ' ', code(t('enr.url.example')))),
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'enr-key', text: t('enr.key') }), key),
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'enr-hn', text: t('enr.headerName') }), hn),
