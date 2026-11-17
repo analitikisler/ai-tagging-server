@@ -110,13 +110,14 @@ With `DEBUG_TOKEN` set, add `__debug` to any hit and send the token in an `x-deb
 | `DEBUG_TOKEN` | off | Enables the `__debug` report. At least 16 characters. Accepted only in the `x-debug-token` header, so it never appears in URL logs. |
 | `OUTGOING_ALLOW_PRIVATE` | `0` | `1` allows sends to private and internal addresses. Otherwise every address a name resolves to is checked when connecting, redirects aren't followed, and `HTTP_PROXY`/`HTTPS_PROXY` are ignored. |
 | `SEND_RETRIES` | `1` | Extra attempts for an outgoing send after a failed connection or a 502, 503 or 504 answer (max 5). Timeouts aren't retried, and all attempts stay within the request's time budget. |
-| `PROXY_SECRET` | off | When set (16+ characters), every request except `/health` must carry it in `x-proxy-secret`, so only your edge proxy can reach the server. The proxy's `x-forwarded-host` and `x-sst-client-ip` are then trusted, and the secret is removed before templates see the headers. Without it the visitor IP comes from `cf-connecting-ip`, `x-real-ip` or `x-forwarded-for`, which a client can fake unless a proxy in front of the server overwrites them. |
+| `PROXY_SECRET` | off | When set (16+ characters), every request except `/health` must carry it in `x-proxy-secret`, so only your edge proxy can reach the server. The proxy's `x-forwarded-host` and `x-sst-client-ip` are then trusted, and the secret is removed before templates see the headers. A request without it is refused before its body is read. Without a secret the visitor IP is the connection's address (see `CLIENT_IP_HEADER`). |
+| `CLIENT_IP_HEADER` | none | For a server behind a proxy that isn't the edge Worker: the header that proxy puts the visitor's IP in, e.g. `cf-connecting-ip` or `x-real-ip`. Without it, and without `x-sst-client-ip` from the edge proxy, the visitor IP is the address the connection comes from, and no header is believed. See [Behind a proxy](#behind-a-proxy). |
 
 ## Speed and monitoring
 
 Each worker keeps one JavaScript runtime and compiles the built-in and container templates once; later hits load the compiled code instead of parsing it. Every hit still runs in fresh contexts, so a template's variables never carry over between visitors. On a 4-core machine a GA4 hit takes about 0.9 ms of JavaScript time, down from 3.6 ms, with the outgoing send to Google on top.
 
-`GET /system` returns counters as JSON: requests by status class, in-flight and refused-as-busy requests, events, tag outcomes (success, failure, skipped, timeout), sends (ok, failed, retried) and a latency histogram with approximate p50/p95/p99. Counters start at zero when the process starts, so on Cloud Run each instance reports its own. The route needs `DEBUG_TOKEN` in the `x-debug-token` header (and `PROXY_SECRET` when one is set); without a configured token it answers 404.
+`GET /system` returns counters as JSON: requests by status class, in-flight and refused-as-busy requests, events, tag outcomes (success, failure, skipped, timeout), sends (ok, failed, retried) and a latency histogram with approximate p50/p95/p99. Counters start at zero when the process starts, so on Cloud Run each instance reports its own. The route needs `DEBUG_TOKEN` in the `x-debug-token` header (and `PROXY_SECRET` when one is set); without a configured token it answers 404. The edge Worker doesn't forward it: ask the server on its own address, e.g. `curl -H "x-debug-token: …" -H "x-proxy-secret: …" https://<service>.run.app/system`.
 
 `examples/bench/bench.js` load-tests any endpoint that speaks the GA4 protocol, so the same run works against this server, TagPiper or Google's own:
 
@@ -146,7 +147,7 @@ What the AI is sent: the trace as the console shows it (plain user data already 
 With `CONTAINER_FILE` and the admin console, edits don't go live as they are saved. They collect in a **draft**, kept in the state folder, like a GTM workspace: the console shows and edits the draft, with a bar listing what it changes against live. Each edit still gets the check against recent and pinned hits.
 
 - **Publish** puts the whole draft live as a named version, with a note, after the same check against live. A draft started before live changed (another publish, a hand edit to the file) is only published over that change when you confirm. Every instance runs the new version within a few seconds.
-- **Preview** the draft in one browser: on the Setup check page, "Preview the draft" gives a code; opening the site with `?sst_check=<code>` makes that browser run the draft, and a `_sst_check` cookie keeps its next pages on the draft for 4 hours. Everyone else keeps the live container. Sends are dry unless you choose "Send for real": the draft runs fully, but nothing reaches the platforms (Google's own scripts are still fetched, so the page's tags load). A preview's answers are never cacheable. The live check shows that browser's hits and gives the draft's test result for a conversion. Preview hits show as `preview` in the debugger and stay out of the counts behind alerts and the setup check.
+- **Preview** the draft in one browser: on the Setup check page, "Preview the draft" gives a code; opening the site with `?sst_check=<code>` makes that browser run the draft, and a `_sst_check` cookie (`Secure`, `HttpOnly`) keeps its next pages on the draft for 4 hours. Everyone else keeps the live container. Sends are dry unless you choose "Send for real": the draft runs fully, but nothing reaches the platforms (Google's own scripts are still fetched, so the page's tags load). A preview's answers are never cacheable. The live check shows that browser's hits and gives the draft's test result for a conversion. Preview hits show as `preview` in the debugger and stay out of the counts behind alerts and the setup check.
 - **Discard** drops the draft. **Rollback**: History lists each published version; Undo puts live back to before one.
 
 `POST /admin/api/container/publish` (`{ "revision", "name", "note", "force" }`, `"check": true` for the check), `DELETE /admin/api/container/draft`, and `POST /admin/api/checkup/live` with `{ "preview": true, "send": false }`. Edits through the API go to the draft the same way.
@@ -268,7 +269,7 @@ With `CONTAINER_FILE`, tags can be added, changed, turned off, reordered and del
 
 Traces stay in the process's memory, so on Cloud Run each instance keeps its own. They drop the values of the `authorization`, `x-debug-token` and `x-proxy-secret` headers and keep only cookie names, but keep the query and up to 16 KB of a form body, which can carry personal data (of a JSON body, such as a Shopify order, only the keys are kept, never the values): only people allowed to see the hits should hold the token, and `TRACE_BUFFER=0` keeps nothing. Plain user-provided data never reaches a trace or the `__debug` report: it shows as `[hashed before sending]` in events, in the request's query and body, in each event's raw hit and in forwarded URLs, and SHA-256 digests are kept. The GA4 tag forwards the hit to Google as the browser sent it, without plain user data unless its `stripUserData` is set to `false`.
 
-The admin routes work on any host and don't need `PROXY_SECRET`, because the edge proxy only forwards the tracking path and the token guards the rest. A wrong token is answered after half a second, and wrong tokens sent in parallel wait their turn, so an instance answers about eight guesses a second. Keep the token in Secret Manager like the other secrets, and don't route `/admin` through your Worker.
+The admin routes work on any host and don't need `PROXY_SECRET`, because the edge proxy only forwards the tracking path and the token guards the rest. A wrong token is answered after half a second, and wrong tokens sent in parallel wait their turn, so an instance answers about eight guesses a second. Keep the token in Secret Manager like the other secrets, and open the console on the server's own address: the edge Worker answers `/admin` and `/system` with `404`, so neither is served on the site's domain.
 
 `/system` also lists the per-tenant counters, and counts hits for unknown hosts as `unknown_host`.
 
@@ -528,20 +529,28 @@ Cloud Run's own request logs keep each full request URL, including hit parameter
 
 ### Upgrading
 
-Four defaults changed to the safer side. A setup that relied on the old ones says so explicitly:
+Several defaults changed to the safer side. A setup that relied on the old ones says so explicitly:
 
 - **Origin check.** `ORIGIN_CHECK`, a tenant's `origin_check` and the GA4 client's `originCheck` now default to `enforce` (was `log`). If the server's host isn't the site's own (`edge.example.com` serving `example.com`), set `SITE_DOMAINS` / `siteDomains` first, or the site's hits get `403`. `log` brings the old behaviour back.
 - **Plain user data to GA4.** `stripUserData` now defaults to on. `STRIP_USER_DATA=0`, a tenant's `"strip_user_data": false` or the tag's `"stripUserData": false` forwards it as before. Tenants saved earlier have `false` written in their file and keep it until changed.
 - **Repeated transactions and batches.** The GA4 client runs an event name and `transaction_id` once a day per property (`"dedupeTransactions": false` turns that off), runs 25 events of a batch (was 100) and reads 256 KB of a hit's body (was 1 MB).
+- **The visitor's IP.** Without `PROXY_SECRET`, the server used to take the visitor's IP from `cf-connecting-ip`, `x-real-ip` or `x-forwarded-for`, which any client can send. It now uses the connection's address unless `CLIENT_IP_HEADER` names the header your proxy sets. A server behind nginx or Cloudflare without the edge Worker needs that variable, or every visitor gets the proxy's address. Deployments through the Worker are not affected.
+- **The edge Worker.** Deploy the Worker from this release: it answers `/admin` and `/system` with `404` (use the server's own address for both) and drops forwarding and location headers a visitor sent.
 - **Consent told to Google Ads.** The `google_ads` tag reports `ad_user_data` and `ad_personalization` as the hit gave them and leaves out a signal the hit didn't carry (it used to say granted). Conversions sent with "Send when the hit has no consent signals", Shopify orders among them, now reach Google without a consent statement, which Google may not use for visitors in the EEA.
 
 Deploy the Worker from the same release before the server, and keep its `PATH_PREFIX`. The server builds the address of the Google scripts it serves (`gtm.js` points the Google tag at it) from the forwarded host and the Worker's `x-forwarded-prefix` header. Without that header it assumes the server runs at the root. An older Worker that doesn't send the header leaves the Google tag loading from `https://your-site/gtag/js`, which returns `404`, and GA4 stops.
 
 To check a new server version before it takes traffic, deploy it with `--no-traffic --tag next` and request `gtm.js` from the tag's address with the headers the Worker sends (`x-proxy-secret`, `x-forwarded-host`, `x-forwarded-prefix`). The Google tag's address in the answer (`"3":"your-site/k7q2"`) must include your path. `gtm.js` is cached for 4 hours, by Cloudflare and by browsers, so a wrong copy outlives a rollback. Cloudflare keeps the Worker's fetches under the Cloud Run URL, so purge that URL, or switch `ORIGIN_URL` to the service's other address, to drop it.
 
-## Behind Cloudflare
+## Behind a proxy
 
-`getRemoteAddress()` and the GA4 events use the first of `CF-Connecting-IP`, `X-Real-IP`, the left-most `X-Forwarded-For` entry and the socket address. The location headers `visitorInfo` reads are trusted the same way. Make sure only your proxy can reach the server (`PROXY_SECRET`), so visitors can't set these headers themselves.
+`getRemoteAddress()` and the GA4 events need the visitor's IP, which a server behind a proxy can only learn from a header, and a header says whatever its sender likes. So the server believes one only when told to:
+
+- **The edge Worker** (`PROXY_SECRET`): the Worker sends the visitor's IP in `x-sst-client-ip` together with the secret, and drops what a visitor sent under that name, as `x-forwarded-*`, `x-real-ip` and the like, or as another host's location headers, before setting its own.
+- **Another proxy** (nginx, Caddy, a load balancer, Cloudflare without the Worker): set `CLIENT_IP_HEADER` to the header that proxy sets, such as `cf-connecting-ip` or `x-real-ip`. From a list (`x-forwarded-for`), the last entry is taken, the one your proxy added itself; the entries before it are the client's own. With more than one proxy in front, name a header the first of them overwrites instead. Make sure only your proxy can reach the server, or a visitor can still send that header directly.
+- **Neither**: the visitor's IP is the address the connection comes from. Behind a proxy that is the proxy's own, so platforms place every visitor there until one of the two above is set.
+
+The location headers `visitorInfo` reads (`cf-ipcountry`, `x-vercel-ip-country` and so on) are read as they arrive. The Worker lets only Cloudflare's own through; behind another proxy, have it overwrite or remove the ones it doesn't set.
 
 ## Development
 
@@ -549,6 +558,7 @@ To check a new server version before it takes traffic, deploy it with `--no-traf
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
+node --test deploy/cloudflare/worker.test.mjs
 ```
 
 ## About

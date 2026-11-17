@@ -58,6 +58,8 @@ jobs:
           EOF
       - name: Check the Cloudflare Worker
         run: node --input-type=module -e "import('./deploy/cloudflare/worker.js').then((m) => { if (typeof m.default.fetch !== 'function') process.exit(1); })"
+      - name: Test the Cloudflare Worker
+        run: node --test deploy/cloudflare/worker.test.mjs
 
   docker:
     runs-on: ubuntu-latest

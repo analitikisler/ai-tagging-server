@@ -372,6 +372,10 @@ pub struct App {
     pub debug_token: Option<String>,
     /// When set, only requests from the edge proxy (carrying this secret) are served.
     pub proxy_secret: Option<String>,
+    /// The header a proxy in front of the server puts the visitor's IP in
+    /// (`CLIENT_IP_HEADER`). Without it, and without the edge proxy's
+    /// secret, the IP is the connection's.
+    pub client_ip_header: Option<String>,
     /// Counts per quarter hour for the alerts, with the admin console on.
     pub counts: Option<Arc<crate::counts::Recorder>>,
     /// Names the server in a header on every tracking response, so
@@ -474,9 +478,12 @@ async fn system(
     let Some(token) = app.debug_token.as_deref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Some((headers, _)) =
-        from_proxy(headers, app.proxy_secret.as_deref(), &peer.ip().to_string())
-    else {
+    let Some((headers, _)) = from_proxy(
+        headers,
+        app.proxy_secret.as_deref(),
+        app.client_ip_header.as_deref(),
+        &peer.ip().to_string(),
+    ) else {
         return (StatusCode::FORBIDDEN, "forbidden").into_response();
     };
     if !headers
@@ -502,9 +509,6 @@ async fn handle(
     req: Request<Body>,
 ) -> Response {
     let (parts, body) = req.into_parts();
-    let Ok(body) = to_bytes(body, body_limit(parts.uri.path())).await else {
-        return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
-    };
 
     let headers: Vec<(String, String)> = parts
         .headers
@@ -517,10 +521,18 @@ async fn handle(
         })
         .collect();
 
-    let Some((headers, remote)) =
-        from_proxy(headers, app.proxy_secret.as_deref(), &peer.ip().to_string())
-    else {
+    // Before the body is read: a request that isn't the proxy's costs the
+    // server none of it.
+    let Some((headers, remote)) = from_proxy(
+        headers,
+        app.proxy_secret.as_deref(),
+        app.client_ip_header.as_deref(),
+        &peer.ip().to_string(),
+    ) else {
         return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    };
+    let Ok(body) = to_bytes(body, body_limit(parts.uri.path())).await else {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
     };
 
     let raw_query = parts.uri.query().unwrap_or("");
@@ -662,9 +674,12 @@ async fn handle(
             .retain(|(k, _)| !k.eq_ignore_ascii_case("cache-control"));
         r.headers
             .push(("cache-control".into(), "private, no-store".into()));
+        // Only the server reads it, and only over HTTPS.
         r.headers.push((
             "set-cookie".into(),
-            format!("{PREVIEW_COOKIE}={code}; Path=/; Max-Age=14400; SameSite=Lax"),
+            format!(
+                "{PREVIEW_COOKIE}={code}; Path=/; Max-Age=14400; SameSite=Lax; Secure; HttpOnly"
+            ),
         ));
     }
     let mut res = Response::new(Body::from(r.body));
@@ -960,10 +975,26 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn an_oversized_hit_is_refused_before_any_template_runs() {
+    /// A server on a free port that runs the built-in container and records
+    /// what its tags send instead of sending it.
+    async fn serving(
+        proxy_secret: Option<&str>,
+        client_ip_header: Option<&str>,
+    ) -> (String, Arc<Sent>) {
+        let sent = Arc::new(Sent(Default::default()));
+        let transport: Arc<dyn crate::sandbox::Transport> = sent.clone();
+        let pool = Pool::new(1, 8, move |t: &Resolved| {
+            crate::sandbox::Engine::new(
+                t.container.clone(),
+                t.storage.clone(),
+                transport.clone(),
+                Duration::from_secs(2),
+                32 << 20,
+            )
+            .unwrap()
+        });
         let app = App {
-            pool: Pool::for_tests(),
+            pool: Arc::new(pool),
             target: Target::Single(ContainerFile::fixed(
                 crate::container::Container::builtin(),
                 Default::default(),
@@ -971,7 +1002,8 @@ mod tests {
             )),
             admin: None,
             debug_token: None,
-            proxy_secret: None,
+            proxy_secret: proxy_secret.map(String::from),
+            client_ip_header: client_ip_header.map(String::from),
             counts: None,
             identify: false,
         };
@@ -984,6 +1016,14 @@ mod tests {
             )
             .await
         });
+        (base, sent)
+    }
+
+    const PAGE_VIEW: &str = "/g/collect?v=2&tid=G-1&cid=1.2&en=page_view";
+
+    #[tokio::test]
+    async fn an_oversized_hit_is_refused_before_any_template_runs() {
+        let (base, sent) = serving(None, None).await;
         let http = reqwest::Client::new();
         let post = |path: &str, bytes: usize| {
             http.post(format!("{base}{path}"))
@@ -993,19 +1033,107 @@ mod tests {
                 .send()
         };
         // A batch within the limit is run; one past it is not read.
-        let ok = post("/g/collect?v=2&tid=G-1&cid=1.2&en=page_view", 0).await;
+        let ok = post(PAGE_VIEW, 0).await;
         assert_eq!(ok.unwrap().status(), 204);
-        let big = post(
-            "/g/collect?v=2&tid=G-1&cid=1.2&en=page_view",
-            MAX_COLLECT_BODY + 1,
-        )
-        .await;
+        let big = post(PAGE_VIEW, MAX_COLLECT_BODY + 1).await;
         assert_eq!(big.unwrap().status(), 413);
         // A webhook of that size is still read (and here, claimed by nobody).
         let hook = post("/shopify/orders", MAX_COLLECT_BODY + 1).await;
         assert_eq!(hook.unwrap().status(), 400);
         let huge = post("/shopify/orders", MAX_BODY + 1).await;
         assert_eq!(huge.unwrap().status(), 413);
+        assert_eq!(sent.0.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_visitors_address_is_the_connections_unless_a_header_is_trusted() {
+        let http = reqwest::Client::new();
+        // A hit that claims three other addresses for itself.
+        let hit = |base: &str| {
+            http.get(format!("{base}{PAGE_VIEW}"))
+                .header("user-agent", "Mozilla/5.0 Chrome/141.0")
+                .header("origin", base)
+                .header("x-forwarded-for", "8.8.8.8, 8.8.4.4")
+                .header("cf-connecting-ip", "1.1.1.1")
+                .header("x-real-ip", "9.9.9.9")
+                .header("x-sst-client-ip", "4.4.4.4")
+                .send()
+        };
+        let forwarded = |sent: &Sent| sent.0.lock().unwrap().last().unwrap().clone();
+
+        // Nothing configured: the address the connection came from.
+        let (base, sent) = serving(None, None).await;
+        assert_eq!(hit(&base).await.unwrap().status(), 204);
+        let url = forwarded(&sent);
+        assert!(url.contains("_uip=127.0.0.1"), "{url}");
+
+        // The operator's proxy sets x-real-ip: that header, and no other.
+        let (base, sent) = serving(None, Some("x-real-ip")).await;
+        hit(&base).await.unwrap();
+        let url = forwarded(&sent);
+        assert!(url.contains("_uip=9.9.9.9"), "{url}");
+
+        // A list: the entry the proxy appended, not what the client put first.
+        let (base, sent) = serving(None, Some("x-forwarded-for")).await;
+        hit(&base).await.unwrap();
+        let url = forwarded(&sent);
+        assert!(url.contains("_uip=8.8.4.4"), "{url}");
+    }
+
+    #[tokio::test]
+    async fn without_the_proxy_secret_a_request_is_refused_before_its_body_is_read() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        const SECRET: &str = "0123456789abcdef-proxy";
+        let (base, sent) = serving(Some(SECRET), None).await;
+        let addr = base.trim_start_matches("http://").to_string();
+        // Announces 100 bytes and sends 10: an answer that comes anyway was
+        // given without waiting for the rest.
+        let open = |secret: &'static str| {
+            let addr = addr.clone();
+            async move {
+                let mut sock = tokio::net::TcpStream::connect(&addr).await.unwrap();
+                let head = format!(
+                    "POST {PAGE_VIEW} HTTP/1.1\r\nhost: {addr}\r\nuser-agent: Mozilla/5.0 Chrome/141.0\r\n\
+                     x-proxy-secret: {secret}\r\nx-forwarded-host: shop.example\r\norigin: https://shop.example\r\n\
+                     x-sst-client-ip: 198.51.100.4\r\ncontent-length: 100\r\n\r\n0123456789"
+                );
+                sock.write_all(head.as_bytes()).await.unwrap();
+                sock
+            }
+        };
+        let answer = |mut sock: tokio::net::TcpStream, wait_ms: u64| async move {
+            let mut buf = vec![0; 256];
+            let read =
+                tokio::time::timeout(Duration::from_millis(wait_ms), sock.read(&mut buf)).await;
+            let line = match read {
+                Ok(Ok(n)) => Some(
+                    String::from_utf8_lossy(&buf[..n])
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string(),
+                ),
+                _ => None,
+            };
+            (sock, line)
+        };
+
+        let (_, refused) = answer(open("not-the-secret").await, 10_000).await;
+        assert_eq!(refused.as_deref(), Some("HTTP/1.1 403 Forbidden"));
+
+        // The proxy's own request is read to its end before it is answered,
+        // and runs with the visitor the proxy names.
+        let (mut sock, early) = answer(open(SECRET).await, 300).await;
+        assert_eq!(early, None, "answered before the body arrived");
+        sock.write_all("&ep.pad=".repeat(12).as_bytes())
+            .await
+            .unwrap();
+        sock.write_all(b"xxxxxx").await.unwrap();
+        let (_, done) = answer(sock, 10_000).await;
+        assert_eq!(done.as_deref(), Some("HTTP/1.1 204 No Content"));
+        let urls = sent.0.lock().unwrap().clone();
+        assert_eq!(urls.len(), 1);
+        assert!(urls[0].contains("_uip=198.51.100.4"), "{}", urls[0]);
     }
 
     #[test]
@@ -1113,6 +1241,7 @@ mod tests {
             admin: Some(admin.clone()),
             debug_token: None,
             proxy_secret: None,
+            client_ip_header: None,
             counts: Some(counts.clone()),
             identify: true,
         };
@@ -1157,6 +1286,13 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(cookie.starts_with("_sst_check=ab12cd34;"), "{cookie}");
+        // Sent back over HTTPS only, and out of reach of the page's scripts.
+        for attribute in ["Secure", "HttpOnly", "SameSite=Lax", "Path=/"] {
+            assert!(
+                cookie.split("; ").any(|a| a == attribute),
+                "{attribute} missing from {cookie}"
+            );
+        }
         assert_eq!(
             sent.0.lock().unwrap().len(),
             1,

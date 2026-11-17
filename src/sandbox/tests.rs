@@ -688,7 +688,7 @@ fn full_template_storage_still_takes_new_keys() {
         r.logs
     );
     let storage = engine.storage.lock().unwrap();
-    assert_eq!(storage["c"].len(), 10_000);
+    assert_eq!(storage["template:c"].len(), 10_000);
 }
 
 #[test]
@@ -3332,4 +3332,67 @@ fn a_visitor_who_denied_analytics_is_forwarded_without_the_ip() {
         assert!(url.contains("_uip=203.0.113.9"), "{granted}: {url}");
         assert!(header, "{granted}");
     }
+}
+
+#[test]
+fn a_template_from_a_file_never_gets_the_ad_tags_storage() {
+    // What the Meta tag keeps of a visitor it looked up.
+    const KEPT: &str = "enrich:user_id:User@Example.com";
+    let answer = r#"{"email":"jane@example.com","phone":"+491701234567"}"#;
+    let mut c = providers(&[META], Some("https://shop.example/api/visitor"));
+
+    // Two templates someone else wrote. One is installed under the name
+    // the shared storage used to have; the other begins with a copy of the
+    // ad tags' own code, which is how the server tells those apart.
+    let named = format!(
+        "const storage = require('templateDataStorage');\n\
+         const log = require('logToConsole');\n\
+         const JSON = require('JSON');\n\
+         log('seen=' + JSON.stringify(storage.getItemCopy('{KEPT}') || null));\n\
+         data.gtmOnSuccess();"
+    );
+    let copied = format!(
+        "{}\nlogToConsole('seen=' + JSON.stringify(templateDataStorage.getItemCopy('{KEPT}') || null));\n\
+         data.gtmOnSuccess();",
+        include_str!("../templates/provider_common.js")
+    );
+    let everything = json!({
+        "access_template_storage": {}, "logging": {},
+        "read_event_data": { "keys": ["*"] }, "get_cookies": { "names": ["*"] },
+        "send_http": { "urls": ["*"] },
+    });
+    for (name, src) in [("provider_common", named), ("copycat", copied)] {
+        c.templates.insert(name.into(), src);
+        c.permissions.insert(
+            name.into(),
+            crate::permissions::from_json(&everything).unwrap(),
+        );
+        c.tags
+            .push(serde_json::from_value(json!({ "name": name, "template": name })).unwrap());
+    }
+    c.compile().unwrap();
+    let (engine, _) = engine_answering(c, 200, answer);
+
+    engine.run(meta_hit(PURCHASE));
+    // The answer is kept, in the map only the server's own tags share.
+    {
+        let storage = engine.storage.lock().unwrap();
+        assert!(storage["shared:providers"].contains_key(KEPT));
+        assert!(!storage.contains_key("provider_common"));
+    }
+    // The next order: the answer is there for the Meta tag, and neither
+    // outside template can read it.
+    let r = engine.run(meta_hit(
+        &PURCHASE.replace("transaction_id=T1", "transaction_id=T2"),
+    ));
+    for name in ["provider_common", "copycat"] {
+        let tag = r.tags.iter().find(|t| t.tag == name).unwrap();
+        assert_eq!(tag.outcome, TagOutcome::Success, "{name}: {:?}", r.logs);
+        assert!(
+            r.logs.contains(&format!("[{name}] seen=null")),
+            "{name}: {:?}",
+            r.logs
+        );
+    }
+    assert!(!r.logs.iter().any(|l| l.contains("jane@example.com")));
 }

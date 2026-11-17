@@ -29,7 +29,7 @@ use crate::history::{self, Before, History};
 use crate::integrations::{Enrichment, Integrations, TestOverrides, test_event};
 use crate::metrics::{self, METRICS};
 use crate::replay::{self, Hit};
-use crate::request::{IncomingRequest, remote_address, same};
+use crate::request::{IncomingRequest, forwarded_address, same};
 use crate::sandbox::RunResult;
 use crate::server::{Pool, Target, summarize};
 use crate::state::State as StateStore;
@@ -2147,7 +2147,7 @@ async fn send_test(
             )
         })
         .collect();
-    let ip = remote_address(&pairs, &peer.ip().to_string());
+    let ip = forwarded_address(&pairs, &peer.ip().to_string());
     let header = |name: &str| {
         pairs
             .iter()

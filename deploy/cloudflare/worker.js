@@ -8,6 +8,20 @@
 // With the RATE_LIMITER binding (wrangler.toml), each visitor IP gets a fixed
 // number of requests per period; the rest are answered 429 here and never
 // reach the server.
+//
+// Only tracking goes through: the admin console and the counters (/admin,
+// /system) are answered 404 here, so they are reached on the server's own
+// address and never on the site's. Headers a visitor could send to pass for
+// the proxy, or to claim another address or place, are dropped before the
+// proxy sets its own.
+
+// The server's own pages, not for the site's domain.
+const PRIVATE_PATHS = /^\/(admin|system)(\/|$)/i;
+// What the server, or a template, would read as a proxy's word on who and
+// where the visitor is. Cloudflare's own cf-connecting-ip and cf-ipcountry
+// can't be set by a visitor and stay.
+const CLAIMS = /^(x-sst-|x-forwarded-|x-real-ip$|x-client-ip$|true-client-ip$|fastly-client-ip$|forwarded$|x-proxy-secret$|x-vercel-|cloudfront-|x-appengine-|cf-region-code$|cf-ipcity$|cf-postal-code$)/;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -29,18 +43,25 @@ export default {
       }
     }
 
+    const path = url.pathname.slice(prefix.length) || '/';
+    if (PRIVATE_PATHS.test(path)) {
+      return new Response('not found', { status: 404 });
+    }
     const target = new URL(env.ORIGIN_URL);
-    target.pathname = url.pathname.slice(prefix.length) || '/';
+    target.pathname = path;
     target.search = url.search;
 
     const headers = new Headers(request.headers);
+    for (const name of [...headers.keys()]) {
+      if (CLAIMS.test(name)) headers.delete(name);
+    }
     headers.set('x-forwarded-host', url.host);
     headers.set('x-forwarded-prefix', prefix);
     headers.set('x-sst-client-ip', ip);
     headers.set('x-proxy-secret', env.PROXY_SECRET);
 
     // The visitor's location from Cloudflare, for the GA4 client's
-    // visitorInfo. Values a client sent under these names are dropped first.
+    // visitorInfo.
     const geo = {
       'x-sst-geo-country': request.cf?.country,
       'x-sst-geo-region': request.cf?.regionCode,
@@ -48,7 +69,6 @@ export default {
       'x-sst-geo-postal-code': request.cf?.postalCode,
     };
     for (const [name, value] of Object.entries(geo)) {
-      headers.delete(name);
       if (value) headers.set(name, value);
     }
 

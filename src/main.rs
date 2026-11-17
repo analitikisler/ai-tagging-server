@@ -72,12 +72,29 @@ async fn main() {
         eprintln!("PROXY_SECRET must be at least 16 characters");
         std::process::exit(1);
     }
-    if proxy_secret.is_none() {
-        tracing::warn!(
-            "PROXY_SECRET is not set: the visitor IP sent to vendors comes from \
-             cf-connecting-ip, x-real-ip or x-forwarded-for, which clients can fake \
-             unless a proxy in front of this server overwrites them"
-        );
+    // The header a proxy in front of the server puts the visitor's IP in.
+    let client_ip_header = std::env::var("CLIENT_IP_HEADER")
+        .ok()
+        .map(|h| h.trim().to_ascii_lowercase())
+        .filter(|h| !h.is_empty());
+    if client_ip_header.as_ref().is_some_and(|h| {
+        !h.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    }) {
+        eprintln!("CLIENT_IP_HEADER must be a header name, such as cf-connecting-ip or x-real-ip");
+        std::process::exit(1);
+    }
+    match (&proxy_secret, &client_ip_header) {
+        (None, None) => tracing::warn!(
+            "PROXY_SECRET is not set: the visitor IP sent to vendors is the address the \
+             connection comes from. Behind a proxy, that is the proxy's: name the header it \
+             puts the visitor's IP in with CLIENT_IP_HEADER (cf-connecting-ip, x-real-ip)"
+        ),
+        (None, Some(h)) => tracing::warn!(
+            "PROXY_SECRET is not set: the visitor IP is read from {h}, which a client can \
+             set itself unless only your proxy can reach this server and it overwrites {h}"
+        ),
+        _ => {}
     }
 
     let tenants_file = std::env::var("TENANTS_FILE").ok().filter(|p| !p.is_empty());
@@ -418,6 +435,7 @@ async fn main() {
         admin: admin.clone(),
         debug_token: debug_token.clone(),
         proxy_secret: proxy_secret.clone(),
+        client_ip_header,
         counts: counts.clone(),
         identify: env("SERVER_HEADER", 1u8) != 0,
     };

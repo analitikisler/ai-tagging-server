@@ -183,10 +183,16 @@ impl Container {
     /// The `templateDataStorage` map a template uses. The built-in ad-platform
     /// tags share one, so a visitor looked up for one platform is not looked
     /// up again for the others; every other template has its own.
+    ///
+    /// That shared map holds visitors' details and a Google access token, so
+    /// only the server's own templates get it: a template from a file (it
+    /// has permissions) never does, whatever it is called and however it
+    /// begins, and no template name can spell the shared map's.
     pub fn storage_scope(&self, template: &str) -> String {
+        let own = !self.permissions.contains_key(template);
         match self.templates.get(template) {
-            Some(src) if src.starts_with(PROVIDER_COMMON) => "provider_common".into(),
-            _ => template.into(),
+            Some(src) if own && src.starts_with(PROVIDER_COMMON) => "shared:providers".into(),
+            _ => format!("template:{template}"),
         }
     }
 
