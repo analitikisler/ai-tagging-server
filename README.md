@@ -43,10 +43,10 @@ MEASUREMENT_IDS=G-XXXXXXX ./target/release/tagging-server
 
 Then:
 
-1. Send a test hit. It's answered `204` and forwarded to GA4 (hits from `curl`'s own user agent are treated as a bot, hence `-A`):
+1. Send a test hit. It's answered `204` and forwarded to GA4 (hits from `curl`'s own user agent are treated as a bot, hence `-A`, and a hit must come from a page of the site, hence the `Origin`):
 
    ```sh
-   curl -i -A 'Mozilla/5.0' "http://localhost:8080/g/collect?v=2&tid=G-XXXXXXX&cid=123.456&en=page_view&dl=https%3A%2F%2Fexample.com%2F"
+   curl -i -A 'Mozilla/5.0' -H 'Origin: http://localhost:8080' "http://localhost:8080/g/collect?v=2&tid=G-XXXXXXX&cid=123.456&en=page_view&dl=https%3A%2F%2Fexample.com%2F"
    ```
 
 2. Open `http://localhost:8080/admin`, sign in with the token, and look at the hit under **Live**.
@@ -84,8 +84,9 @@ With `DEBUG_TOKEN` set, add `__debug` to any hit and send the token in an `x-deb
 | `SCRIPT_IDS` | none | Built-in container only: comma-separated GTM container and Google tag ids (`GTM-…`, `G-…`) whose `gtm.js` and `gtag.js` the server serves. |
 | `MEASUREMENT_IDS` | `G-` ids in `SCRIPT_IDS` | Built-in container only: comma-separated GA4 measurement ids hits are accepted for. Hits for other properties are refused. With neither set the server won't start; `*` accepts any id on purpose. |
 | `SITE_DOMAINS` | the request's host | Built-in container only: comma-separated domains whose pages may send hits, subdomains included, e.g. `example.com` when the server runs on `edge.example.com`. |
-| `ORIGIN_CHECK` | `log` | Built-in container only: the GA4 client's `originCheck` (below): `enforce`, `log` or `off`. |
-| `STRIP_USER_DATA` | `0` | Built-in container only: `1` sets the GA4 tag's `stripUserData` (below). |
+| `ORIGIN_CHECK` | `enforce` | Built-in container only: the GA4 client's `originCheck` (below): `enforce`, `log` or `off`. When the server runs on another host than the site's pages (`edge.example.com` for `example.com`), set `SITE_DOMAINS` too, or the site's own hits are refused. |
+| `STRIP_USER_DATA` | `1` | Built-in container only: the GA4 tag's `stripUserData` (below). `0` forwards plain user data to GA4. |
+| `MAX_EVENT_VALUE` | none | Built-in container only: the GA4 client's `maxEventValue` (below), a ceiling for an event's `value`. |
 | `KEEP_COOKIES` | none | Built-in container only: the GA4 client's `keepCookies` (below), comma-separated, e.g. `google_ads,meta`. |
 | `CLICK_ID_ALIASES` | none | Built-in container only: the GA4 client's `clickIdAliases`, e.g. `gclid=gc_id,msclkid=ms_id`. |
 | `VISITOR_INFO` | `0` | Built-in container only: `1` sets the GA4 client's `visitorInfo`. |
@@ -209,8 +210,8 @@ One server can serve several sites. Set `TENANTS_FILE` and each request is route
       "measurement_ids": ["G-ABC123"],
       "script_ids": ["GTM-ABC123"],
       "site_domains": [],
-      "origin_check": "log",
-      "strip_user_data": false,
+      "origin_check": "enforce",
+      "strip_user_data": true,
       "features": { "keep_cookies": ["google_ads", "meta"], "visitor_info": true },
       "enabled": true
     }
@@ -218,7 +219,7 @@ One server can serve several sites. Set `TENANTS_FILE` and each request is route
 }
 ```
 
-`features` sets the GA4 client's optional features for the tenant: `keep_cookies`, `click_id_aliases`, `visitor_info` and `bot_handling`, as described [below](#built-in-templates). A tenant must name at least one `G-` measurement id (`*` isn't accepted), and a host belongs to one tenant. The file is created when missing. Every instance re-reads it within a few seconds of a change, and a file that doesn't validate is ignored with a warning while the tenants already running keep serving. Each worker keeps one compiled runtime per tenant (up to 16) and rebuilds it when the tenant's settings change.
+`features` sets the GA4 client's optional features for the tenant: `keep_cookies`, `click_id_aliases`, `visitor_info` and `bot_handling`, as described [below](#built-in-templates). A tenant must name at least one `G-` measurement id (`*` isn't accepted), and a host belongs to one tenant. A tenant that leaves `origin_check` or `strip_user_data` out gets `enforce` and `true`. The file is created when missing. Every instance re-reads it within a few seconds of a change, and a file that doesn't validate is ignored with a warning while the tenants already running keep serving. Each worker keeps one compiled runtime per tenant (up to 16) and rebuilds it when the tenant's settings change.
 
 On Cloud Run the disk is ephemeral, so put the file on a mounted bucket (Cloud Storage volume mount) shared by all instances, e.g. `TENANTS_FILE=/data/tenants.json`. Each save goes through its own temporary file, so two instances saving at once never corrupt the file, but the later save wins: changes made on two instances in the same moment can lose one of them. Saved files are readable by their owner only. `TENANTS_BUCKET=<name> ./deploy/cloud-run.sh` sets this up (see [Deploy](#deploy-cloud-run-behind-cloudflare)).
 
@@ -257,7 +258,7 @@ With `ADMIN_TOKEN` set, `/admin` serves the console: a debugger for recent hits 
 | `GET /admin/api/integrations` | With `INTEGRATIONS_FILE`: each platform's fields (secrets never returned, only whether they are set), the enrichment settings and the events a test can send. |
 | `PUT /admin/api/integrations/<id>` | Saves one platform (`{ "enabled", "fields": { ... } }`). A secret sent empty keeps the stored one. |
 | `POST /admin/api/integrations/<id>/test` | Sends one made-up event through the platform's tag (`{ "event", "test_event_code", "test_mode" }`, all optional; the test settings apply to this event only). |
-| `PUT /admin/api/enrichment` | Saves the enrichment settings (`{ "enabled", "url", "key", "header_name", "header_value", "event_user_data" }`). |
+| `PUT /admin/api/enrichment` | Saves the enrichment settings (`{ "enabled", "url", "key", "header_name", "header_value", "event_user_data", "require_signature", "signing_key" }`). A header value or signing key sent empty keeps the stored one. |
 | `GET /admin/api/tenants` | Tenants and their counters. |
 | `POST /admin/api/tenants` | Creates a tenant (JSON body as above). |
 | `PUT /admin/api/tenants/<id>` | Replaces a tenant's settings. |
@@ -265,7 +266,7 @@ With `ADMIN_TOKEN` set, `/admin` serves the console: a debugger for recent hits 
 
 With `CONTAINER_FILE`, tags can be added, changed, turned off, reordered and deleted from the console. A save rewrites the file's `tags` list (a temporary file renamed over it) and leaves every other key as written; the new container is checked like a startup first, and a change that doesn't load is refused with nothing written. Every instance re-reads the file within a few seconds of a change, so saves and hand edits apply without a restart, and a file that no longer loads is ignored with a warning. Each save sends the `revision` it was edited from and gets `409` if the file changed since. Settings shown as `[redacted]` keep their stored value when saved unchanged. The built-in container and tenants' containers can't be edited. In integrated mode the platform tags come after the file's own and are set up under Integrations.
 
-Traces stay in the process's memory, so on Cloud Run each instance keeps its own. They drop the values of the `authorization`, `x-debug-token` and `x-proxy-secret` headers and keep only cookie names, but keep the query and up to 16 KB of a form body, which can carry personal data (of a JSON body, such as a Shopify order, only the keys are kept, never the values): only people allowed to see the hits should hold the token, and `TRACE_BUFFER=0` keeps nothing. Plain user-provided data never reaches a trace or the `__debug` report: it shows as `[hashed before sending]` in events, in the request's query and body, in each event's raw hit and in forwarded URLs, and SHA-256 digests are kept. The GA4 tag forwards the hit to Google as the browser sent it, plain user data included, unless its `stripUserData` is on.
+Traces stay in the process's memory, so on Cloud Run each instance keeps its own. They drop the values of the `authorization`, `x-debug-token` and `x-proxy-secret` headers and keep only cookie names, but keep the query and up to 16 KB of a form body, which can carry personal data (of a JSON body, such as a Shopify order, only the keys are kept, never the values): only people allowed to see the hits should hold the token, and `TRACE_BUFFER=0` keeps nothing. Plain user-provided data never reaches a trace or the `__debug` report: it shows as `[hashed before sending]` in events, in the request's query and body, in each event's raw hit and in forwarded URLs, and SHA-256 digests are kept. The GA4 tag forwards the hit to Google as the browser sent it, without plain user data unless its `stripUserData` is set to `false`.
 
 The admin routes work on any host and don't need `PROXY_SECRET`, because the edge proxy only forwards the tracking path and the token guards the rest. A wrong token is answered after half a second, and wrong tokens sent in parallel wait their turn, so an instance answers about eight guesses a second. Keep the token in Secret Manager like the other secrets, and don't route `/admin` through your Worker.
 
@@ -394,7 +395,7 @@ A tag with a required setting missing fails with a log line naming it, and a Tik
 
 It needs a conversion action in the account, an OAuth client and a refresh token for a Google user with access to the account and the `https://www.googleapis.com/auth/datamanager` scope; the access token is fetched with it and kept until a minute before it expires. Test mode sends `validateOnly`, so Google checks each conversion without importing it. One integration sends one conversion action; a container file can add a `google_ads` tag per action, each with its own `conversion_event`. Conversions take up to a few hours to show in Google Ads.
 
-Consent Mode v2: a tag sends only when the hit grants both `ad_storage` and `ad_user_data`. The server reads them from the hit's `gcd` parameter and falls back to `gcs` for ad storage. A denied signal always skips the event. So does a signal the hit doesn't carry (for example a hit with `gcs` but no `gcd`, from an older tag setup), unless the platform's "Send when the hit has no consent signals" switch is on, which is meant for sites without Consent Mode.
+Consent Mode v2: a tag sends only when the hit grants both `ad_storage` and `ad_user_data`. The server reads them from the hit's `gcd` parameter and falls back to `gcs` for ad storage. A denied signal always skips the event. So does a signal the hit doesn't carry (for example a hit with `gcs` but no `gcd`, from an older tag setup), unless the platform's "Send when the hit has no consent signals" switch is on, which is meant for sites without Consent Mode. The Google Ads tag also passes the consent on: `ad_user_data` and `ad_personalization` as the hit gave them, and nothing for a signal the hit didn't carry.
 
 A skipped event is reported as `skipped`, not as a success, with its reason in the request's log line, for example `tag[Meta Conversions API]=skipped(consent:ad_user_data=denied)`. Reasons are `unmapped_event`, `consent:<signal>=denied` and `consent:<signal>=missing`; LinkedIn and X also skip with `no_user_id`, the BigQuery export with `event_not_selected`, and the GA4 tag an event that isn't a GA4 hit (a Shopify order) with `not_a_ga4_hit`. A skipped run is not a failure: it has its own count in the console, the setup check and the alerts. `/system` and the admin counters count skipped tags apart from successes and failures.
 
@@ -421,6 +422,17 @@ With an enrichment endpoint set, each tag calls it for every conversion: `GET <u
 
 Every field is optional and may be plain or already a SHA-256 hex digest. Plain values are normalised (trimmed and lower-cased, phone numbers reduced to digits, with the `+` of E.164 for TikTok and X, which match on that form) and hashed before they leave the server, and each platform gets the fields it accepts (TikTok: email, phone, external id). Answers are kept for five minutes per visitor, so a busy visitor doesn't hit your server on every event; two tags running for the same event share one lookup. A slow (2 s limit) or failing endpoint never stops a conversion: it is sent without the extra fields. The endpoint must be `https://`, and addresses inside your own network are refused like any other outgoing send.
 
+**Signed ids.** The id comes with the hit, so without a signature anyone who can send a hit picks whose details are looked up and matched to their event. Turn on "Only look up IDs your site has signed" (`require_signature` with a `signing_key` of 16 characters or more) and a visitor is looked up only when the event also carries `user_id_sig` (or `client_id_sig`): the HMAC-SHA256 of the id with that key, as hex. Your site's server computes it when it renders the page, and the page sends it as an event parameter next to `user_id`:
+
+```js
+// Node, on your server: never ship the key to the browser.
+const sig = require('crypto').createHmac('sha256', SIGNING_KEY).update(String(userId)).digest('hex');
+// On the page:
+gtag('event', 'purchase', { user_id_sig: sig, /* … */ });
+```
+
+A missing or wrong signature skips the lookup, kept answers included, and logs `enrichment skipped: user_id_sig missing or wrong`; the conversion is still sent without the extra fields. In a container file the key is the tag's `enrich.signingKey`.
+
 **User data sent with the event.** Turn on "Use user data sent with the event" (`event_user_data` in the enrichment settings) and the tags also use the user-provided data the page sends with GA4 events, with or without an endpoint. The GA4 client puts it in event data as Google's sGTM does, under `user_data`: `email_address`, `phone_number`, `address.first_name`, `last_name`, `street`, `city`, `region`, `postal_code`, `country`, and `sha256_email_address`, `sha256_phone_number`, `address.sha256_first_name`, `address.sha256_last_name`. It reads `ep.user_data.*` parameters (`email` and `phone` count as `email_address` and `phone_number`) and the Google tag's `em` envelope (`tv.1~em.<hash>~ph.<hash>…`), whose base64 digests become hex. Plain values are normalised and hashed like the endpoint's, digests are sent as they are, and where the endpoint answers a field too, its answer wins. A container file's own `meta_capi`, `tiktok_events` or `pinterest_capi` tag turns it on with `"eventUserData": true` in its `data`. Events the server makes itself, such as the Shopify order webhook's (marked with `x-sst-source`), carry the buyer's own details: the tags use those without the switch, and they win over the endpoint's answer.
 
 The Google tag hashes phone numbers in E.164 form (with `+`), which Meta and Pinterest may not match against their digits-only hashes; send the plain number (or a hash of the digits) for those.
@@ -436,7 +448,10 @@ Paid Shopify orders can be sent to the ad tags and the BigQuery export from the 
 - `extendGaCookie` (default `true`): re-sets the `_ga` cookie, and the property's `_ga_<id>` session cookie, from the server with a two-year lifetime, so browsers that cap script-set cookies (Safari) keep the same client id. It is skipped when the hit's Consent Mode state says analytics storage is denied. Set it to `false` to turn it off.
 - `allowedMeasurementIds`: GA4 ids (`G-…`) hits are accepted for. Hits for other ids are left unclaimed, and a batched line that switches to another id is dropped, so nobody can send their own traffic through your server. `["*"]` accepts every id, and so does a missing list, which the server warns about when it loads a container file.
 - `siteDomains`: domains whose pages may send hits, subdomains included. Default: the server's own host.
-- `originCheck` (default `log`): a browser hit from your site carries an `Origin` or `Referer` on one of the site domains. With `enforce`, other hits get `403` and aren't forwarded. With `log` they're forwarded, and the request's log line shows `origin_check=would_reject` with the hosts, so you can see what enforcing would drop before turning it on. `off` skips the check.
+- `originCheck` (default `enforce`): a browser hit from your site carries an `Origin` or `Referer` on one of the site domains. With `enforce`, other hits get `403` and aren't forwarded. With `log` they're forwarded, and the request's log line shows `origin_check=would_reject` with the hosts, so you can see what enforcing would drop. `off` skips the check. A program can send any `Origin` it likes, so this keeps other sites' pages out, not someone set on faking a hit.
+- `dedupeTransactions` (default `true`): an event with a `transaction_id` runs once. The same event name and `transaction_id` for the same property is left out for a day, so a purchase sent again by a reload, or a recorded hit sent again, isn't counted twice. A refund of the same order is another event. What was seen is kept in each instance's memory (10,000 at most), so it is a brake, not a ledger: a different id is a different order.
+- `maxEventValue` (no default): events whose `value` is a number beyond it, above or below zero, are left out, so a made-up purchase can't carry any amount. It is checked on the value as the hit sent it (text that reads as a number counts), in the event's own currency, so pick it for the shop: `MAX_EVENT_VALUE` for the built-in container.
+- Events without a name, or with one longer than GA4's 40 characters, are left out. A batch runs 25 events at most, what a browser sends, and a hit's body may be 256 KB. Whatever is left out is logged as `events_rejected=<n> reason=<event_name|value|duplicate_transaction>`, and the hit is still answered `204`.
 - `keepCookies`: cookie groups to re-set from the server with each platform's own lifetime, so Safari's 7-day cap on cookies set by scripts doesn't cut them short: `google_analytics`, `google_ads` (`_gcl_aw`, `_gcl_gb`, `_gcl_dc`, `_gcl_au`, 90 days), `meta` (`_fbp`, `_fbc`) and `tiktok` (`_ttp`), both kept by default with `keepAdCookies` (below), `pinterest` (`_epik`, `_pin_unauth`), `microsoft` (`_uetmsclkid`, `_uetvid`), `snapchat` (`_scid`), `linkedin` (`li_fat_id`), or any cookie's own name (kept a year). Ad cookies are re-set only when the hit says ad storage is granted (Consent Mode `gcd`, or `gcs` without it); a hit with no consent signal leaves them alone, and a named cookie also needs analytics storage not denied. The Google Analytics cookies follow `extendGaCookie`.
 - `keepAdCookies` (default `true`): keeps Meta's `_fbp` and `_fbc` and TikTok's `_ttp` for 390 days, and makes `_fbc` from `?fbclid` on the landing page, under the same consent rule. `false` turns it off; `keepCookies` can still name them.
 - `clickIdAliases`: click ids to restore from another parameter, e.g. `{ "gclid": "gc_id" }`. Safari and Brave strip known click ids from links in some modes; put the alias in the ad's URL too (in Google Ads, the final URL suffix `gc_id={gclid}`), and a `page_location` that has the alias but no click id gets the click id added for every tag. A click id that's already there wins.
@@ -455,10 +470,10 @@ Only the query parameters Google's script URLs use (`id`, `l`, `cx`, `gtm`, `gtm
 
 **`google_ads`** sends conversions to Google Ads and keeps ad clicks in a first-party cookie, as described under [Ad platforms](#ad-platforms-meta-tiktok-pinterest-google-ads). Settings: `customer_id`, `conversion_action_id`, `client_id`, `client_secret`, `refresh_token`, and optionally `conversion_event`, `login_customer_id`, `test_mode` and `eventUserData`.
 
-**`ga4_tag`** forwards each event's original hit to Google, adding the visitor's IP (`_uip`) and user agent (`_ua`). Forwarding the hit as sent means no parameter is lost in a mapping.
+**`ga4_tag`** forwards each event's original hit to Google, adding the visitor's IP (`_uip`) and user agent (`_ua`). Forwarding the hit as sent means no parameter is lost in a mapping. A visitor who denied `analytics_storage` (Consent Mode `gcd`, or `gcs` without it) is forwarded without the IP address: Google still gets the cookieless hit for its modelling, and places it by this server's address.
 
 - `endpoint`: collection URL. Default `https://www.google-analytics.com/g/collect`.
-- `stripUserData` (default `false`): drops plain user-provided data before forwarding: `ep.user_data.*` and `epn.user_data.*` parameters whose last key isn't `sha256_…` (or the tag's own `_tag_mode`). SHA-256 digests and the Google tag's `em` envelope are kept. GA4 doesn't accept personal data in event parameters, so turn it on when pages send plain user data for the ad platforms. In the console it is a switch on the GA4 tag and on each site; for the built-in container, `STRIP_USER_DATA=1`.
+- `stripUserData` (default `true`): drops plain user-provided data before forwarding: `ep.user_data.*` and `epn.user_data.*` parameters whose last key isn't `sha256_…` (or the tag's own `_tag_mode`). SHA-256 digests and the Google tag's `em` envelope are kept. GA4 doesn't accept personal data in event parameters, and the ad platform tags read the event's user data either way, so leave it on unless Google is meant to get the plain values. In the console it is a switch on the GA4 tag and on each site; for the built-in container, `STRIP_USER_DATA=0` turns it off.
 
 ## Writing templates
 
@@ -512,6 +527,13 @@ Not yet: loading a container exported from Google Tag Manager.
 Cloud Run's own request logs keep each full request URL, including hit parameters, for 30 days. The server's log line drops the query. To keep the platform log from storing hit parameters, exclude `run.googleapis.com/requests` for this service in Cloud Logging, or mention it in your privacy notice.
 
 ### Upgrading
+
+Four defaults changed to the safer side. A setup that relied on the old ones says so explicitly:
+
+- **Origin check.** `ORIGIN_CHECK`, a tenant's `origin_check` and the GA4 client's `originCheck` now default to `enforce` (was `log`). If the server's host isn't the site's own (`edge.example.com` serving `example.com`), set `SITE_DOMAINS` / `siteDomains` first, or the site's hits get `403`. `log` brings the old behaviour back.
+- **Plain user data to GA4.** `stripUserData` now defaults to on. `STRIP_USER_DATA=0`, a tenant's `"strip_user_data": false` or the tag's `"stripUserData": false` forwards it as before. Tenants saved earlier have `false` written in their file and keep it until changed.
+- **Repeated transactions and batches.** The GA4 client runs an event name and `transaction_id` once a day per property (`"dedupeTransactions": false` turns that off), runs 25 events of a batch (was 100) and reads 256 KB of a hit's body (was 1 MB).
+- **Consent told to Google Ads.** The `google_ads` tag reports `ad_user_data` and `ad_personalization` as the hit gave them and leaves out a signal the hit didn't carry (it used to say granted). Conversions sent with "Send when the hit has no consent signals", Shopify orders among them, now reach Google without a consent statement, which Google may not use for visitors in the EEA.
 
 Deploy the Worker from the same release before the server, and keep its `PATH_PREFIX`. The server builds the address of the Google scripts it serves (`gtm.js` points the Google tag at it) from the forwarded host and the Worker's `x-forwarded-prefix` header. Without that header it assumes the server runs at the root. An older Worker that doesn't send the header leaves the Google tag loading from `https://your-site/gtag/js`, which returns `404`, and GA4 stops.
 

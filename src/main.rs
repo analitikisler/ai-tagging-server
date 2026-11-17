@@ -113,6 +113,7 @@ async fn main() {
             "SITE_DOMAINS",
             "ORIGIN_CHECK",
             "STRIP_USER_DATA",
+            "MAX_EVENT_VALUE",
             "KEEP_COOKIES",
             "CLICK_ID_ALIASES",
             "VISITOR_INFO",
@@ -197,11 +198,26 @@ async fn main() {
                     // Domains whose pages may send hits; by default the request's host.
                     let site_domains = list_env("SITE_DOMAINS");
                     let origin_check =
-                        std::env::var("ORIGIN_CHECK").unwrap_or_else(|_| "log".into());
+                        std::env::var("ORIGIN_CHECK").unwrap_or_else(|_| "enforce".into());
                     if !matches!(origin_check.as_str(), "enforce" | "log" | "off") {
                         eprintln!("ORIGIN_CHECK must be enforce, log or off");
                         std::process::exit(1);
                     }
+                    // A ceiling for an event's value; none unless set.
+                    let max_event_value = match std::env::var("MAX_EVENT_VALUE")
+                        .ok()
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty())
+                    {
+                        None => None,
+                        Some(v) => match v.parse::<f64>() {
+                            Ok(n) if n.is_finite() && n > 0.0 => Some(n),
+                            _ => {
+                                eprintln!("MAX_EVENT_VALUE must be a number above 0");
+                                std::process::exit(1);
+                            }
+                        },
+                    };
                     let features = features::Features::from_env(|k| std::env::var(k).ok())
                         .unwrap_or_else(|e| {
                             eprintln!("{e}");
@@ -212,10 +228,12 @@ async fn main() {
                         measurement_ids,
                         site_domains,
                         origin_check,
-                        strip_user_data: matches!(
+                        // On unless turned off.
+                        strip_user_data: !matches!(
                             std::env::var("STRIP_USER_DATA").as_deref().map(str::trim),
-                            Ok("1" | "true")
+                            Ok("0" | "false")
                         ),
+                        max_event_value,
                         features,
                     });
                     ContainerFile::fixed(container, storage.clone(), stats)

@@ -1755,7 +1755,10 @@ fn linkedin_sends_mapped_conversions_and_skips_unmatchable_visitors() {
     );
     assert!(bodies(&rec, "https://api.linkedin.com").is_empty());
 
-    let hit = PURCHASE.replace("thanks", "thanks%3Fli_fat_id%3Dfat-1");
+    // Another order: the same one again would be left out as a duplicate.
+    let hit = PURCHASE
+        .replace("thanks", "thanks%3Fli_fat_id%3Dfat-1")
+        .replace("transaction_id=T1", "transaction_id=T2");
     let r = engine.run(ga4_hit(&hit, ""));
     assert_eq!(
         r.tags[1].outcome,
@@ -1809,7 +1812,9 @@ fn x_sends_a_signed_conversion() {
 
     let hit = format!(
         "{}&pr1=idSKU1~nmShirt~pr19.9~qt2",
-        PURCHASE.replace("thanks", "thanks%3Ftwclid%3Dtw-click")
+        PURCHASE
+            .replace("thanks", "thanks%3Ftwclid%3Dtw-click")
+            .replace("transaction_id=T1", "transaction_id=T2")
     );
     let r = engine.run(ga4_hit(&hit, ""));
     assert_eq!(
@@ -2095,8 +2100,11 @@ fn enrichment_adds_hashed_fields_from_the_sites_server() {
     );
     drop(sent);
 
-    // The next event reuses the answer kept from the first, for both tags.
-    engine.run(meta_hit(PURCHASE));
+    // The next order reuses the answer kept from the first, for both tags.
+    let r = engine.run(meta_hit(
+        &PURCHASE.replace("transaction_id=T1", "transaction_id=T2"),
+    ));
+    assert_eq!(r.events.len(), 1, "{:?}", r.logs);
     let again = rec
         .sent
         .lock()
@@ -2325,7 +2333,7 @@ fn the_enrichment_answer_wins_field_by_field() {
 }
 
 #[test]
-fn ga4_tag_strips_plain_user_data_only_when_asked() {
+fn ga4_tag_strips_plain_user_data_unless_told_not_to() {
     let query = "v=2&tid=G-TEST000001&cid=111.222&en=sign_up\
         &ep.user_data.email_address=a%40b.c&epn.user_data.address.postal_code=10115\
         &ep.user_data.sha256_phone_number=abc123&ep.user_data._tag_mode=MANUAL\
@@ -2348,6 +2356,15 @@ fn ga4_tag_strips_plain_user_data_only_when_asked() {
         kept.contains("ep.user_data.email_address=a%40b.c"),
         "{kept}"
     );
+
+    // A tag with no setting at all strips: a container file's GA4 tag,
+    // and the built-in container as it starts.
+    let (engine, rec) = engine_with(Container::builtin(), 204);
+    assert_eq!(Container::builtin().tags[0].data, json!({}));
+    engine.run(ga4_hit(query, ""));
+    let default = rec.sent.lock().unwrap()[0].url.clone();
+    assert!(!default.contains("ep.user_data.email_address"), "{default}");
+    assert!(default.contains("ep.plan=pro"), "{default}");
 
     let url = sent_url(true);
     for gone in [
@@ -2514,7 +2531,10 @@ fn google_ads_sends_a_conversion_with_the_click_and_a_cached_token() {
     // The token is reused by the next conversion, and a visitor who denied
     // ad personalisation (the fourth letter of gcd) is reported so.
     let mut req = req;
-    req.query = req.query.replace("gcd=13r3r3r2r5l1", "gcd=13r3r3r2q5l1");
+    req.query = req
+        .query
+        .replace("gcd=13r3r3r2r5l1", "gcd=13r3r3r2q5l1")
+        .replace("transaction_id=T1", "transaction_id=T2");
     engine.run(req);
     let ingest = bodies(&rec, "https://datamanager.googleapis.com/v1/events:ingest");
     assert_eq!(
@@ -2931,4 +2951,385 @@ fn outcomes_keep_the_words_traces_and_the_console_know() {
     // Only a failure, an exception or a timeout went wrong.
     assert!(!TagOutcome::Skipped.went_wrong() && !TagOutcome::Success.went_wrong());
     assert!(TagOutcome::Timeout.went_wrong() && TagOutcome::Failure.went_wrong());
+}
+
+/// The built-in container with its GA4 client's data changed.
+fn client_with(change: impl FnOnce(&mut serde_json::Value)) -> Container {
+    let mut c = Container::builtin_with(&Settings {
+        measurement_ids: vec!["G-TEST000001".into(), "G-TEST000002".into()],
+        ..Default::default()
+    });
+    change(&mut c.clients[0].data);
+    c.compile().unwrap();
+    c
+}
+
+#[test]
+fn hits_from_elsewhere_are_refused_unless_the_check_is_loosened() {
+    // Neither the environment nor the container says anything about the
+    // origin check: the client's own default applies.
+    let c = client_with(|d| {
+        d.as_object_mut().unwrap().remove("originCheck");
+    });
+    assert!(c.clients[0].data.get("originCheck").is_none());
+    let (engine, rec) = engine_with(c, 204);
+    let hit = || ga4_hit("v=2&tid=G-TEST000001&cid=1.2&en=page_view", "");
+
+    let foreign = engine.run(with_header(hit(), "origin", Some("https://evil.example")));
+    assert_eq!(foreign.response.status, 403);
+    // No Origin and no Referer: not a page of this site either.
+    let bare = engine.run(with_header(hit(), "origin", None));
+    assert_eq!(bare.response.status, 403);
+    assert!(rec.sent.lock().unwrap().is_empty());
+    assert!(
+        bare.logs
+            .iter()
+            .any(|l| l.contains("origin_check=rejected")),
+        "{:?}",
+        bare.logs
+    );
+
+    assert_eq!(engine.run(hit()).response.status, 204);
+    assert_eq!(rec.sent.lock().unwrap().len(), 1);
+    // The settings the server starts with say the same.
+    assert_eq!(
+        Container::builtin().clients[0].data["originCheck"],
+        "enforce"
+    );
+}
+
+#[test]
+fn a_transaction_sent_again_runs_once() {
+    let (engine, rec) = engine_with(client_with(|_| {}), 204);
+    let buy =
+        "v=2&tid=G-TEST000001&cid=1.2&en=purchase&epn.value=20&cu=EUR&ep.transaction_id=T-100";
+    let sends = || rec.sent.lock().unwrap().len();
+
+    let first = engine.run(ga4_hit(buy, ""));
+    assert_eq!((first.events.len(), sends()), (1, 1), "{:?}", first.logs);
+
+    // The same purchase again (a reload, a replayed hit): answered like any
+    // hit, but no tag runs and the log says why.
+    let again = engine.run(ga4_hit(buy, ""));
+    assert_eq!(again.response.status, 204);
+    assert!(again.events.is_empty() && again.tags.is_empty());
+    assert_eq!(sends(), 1);
+    assert!(
+        again
+            .logs
+            .iter()
+            .any(|l| l.contains("events_rejected=1 reason=duplicate_transaction")),
+        "{:?}",
+        again.logs
+    );
+
+    // Another order, the refund of the first one, and the same order for
+    // the site's second GA4 property are different events.
+    for q in [
+        buy.replace("T-100", "T-101"),
+        buy.replace("en=purchase", "en=refund"),
+        buy.replace("G-TEST000001", "G-TEST000002"),
+    ] {
+        let r = engine.run(ga4_hit(&q, ""));
+        assert_eq!(r.events.len(), 1, "{q}: {:?}", r.logs);
+    }
+    assert_eq!(sends(), 4);
+
+    // A batch that repeats a line runs it once; events without a
+    // transaction_id are never compared.
+    let r = engine.run(ga4_hit(
+        "v=2&tid=G-TEST000001&cid=1.2",
+        "en=purchase&ep.transaction_id=T-200\nen=purchase&ep.transaction_id=T-200\nen=scroll\nen=scroll",
+    ));
+    assert_eq!(r.events.len(), 3, "{:?}", r.logs);
+
+    // Turned off, every hit runs.
+    let (engine, rec) = engine_with(client_with(|d| d["dedupeTransactions"] = json!(false)), 204);
+    engine.run(ga4_hit(buy, ""));
+    engine.run(ga4_hit(buy, ""));
+    assert_eq!(rec.sent.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn events_without_a_usable_name_are_left_out() {
+    let (engine, rec) = engine_with(client_with(|_| {}), 204);
+    let hit =
+        |extra: &str| engine.run(ga4_hit(&format!("v=2&tid=G-TEST000001&cid=1.2{extra}"), ""));
+    let longest = "e".repeat(40);
+    assert_eq!(hit(&format!("&en={longest}")).events.len(), 1);
+
+    for bad in [
+        String::new(),
+        "&en=".to_string(),
+        format!("&en={longest}x"),
+        "&en=pur%0Achase".to_string(),
+    ] {
+        let r = hit(&bad);
+        assert_eq!(r.response.status, 204, "{bad}");
+        assert!(r.events.is_empty(), "{bad}: {:?}", r.events);
+        assert!(
+            r.logs
+                .iter()
+                .any(|l| l.contains("events_rejected=1 reason=event_name")),
+            "{bad}: {:?}",
+            r.logs
+        );
+    }
+    assert_eq!(rec.sent.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_value_beyond_the_ceiling_is_left_out() {
+    let capped = Container::builtin_with(&Settings {
+        measurement_ids: vec!["G-TEST000001".into()],
+        max_event_value: Some(1000.0),
+        ..Default::default()
+    });
+    assert_eq!(capped.clients[0].data["maxEventValue"], 1000.0);
+    let (engine, rec) = engine_with(capped, 204);
+    let hit = |engine: &Engine, value: &str| {
+        engine.run(ga4_hit(
+            &format!("v=2&tid=G-TEST000001&cid=1.2&en=purchase&{value}"),
+            "",
+        ))
+    };
+    for ok in [
+        "epn.value=1000",
+        "epn.value=19.9",
+        "ep.value=49%2C90",
+        "ep.plan=pro",
+    ] {
+        assert_eq!(hit(&engine, ok).events.len(), 1, "{ok}");
+    }
+    // As a number or as text, above the ceiling or as far below zero.
+    for bad in ["epn.value=1000.01", "ep.value=99999", "epn.value=-99999"] {
+        let r = hit(&engine, bad);
+        assert!(r.events.is_empty(), "{bad}");
+        assert!(
+            r.logs
+                .iter()
+                .any(|l| l.contains("events_rejected=1 reason=value")),
+            "{bad}: {:?}",
+            r.logs
+        );
+    }
+    assert_eq!(rec.sent.lock().unwrap().len(), 4);
+
+    // No ceiling unless one is set: the right one depends on the shop.
+    let (engine, _) = engine_with(client_with(|_| {}), 204);
+    assert!(
+        client_with(|_| {}).clients[0]
+            .data
+            .get("maxEventValue")
+            .is_none()
+    );
+    assert_eq!(hit(&engine, "epn.value=99999999").events.len(), 1);
+}
+
+#[test]
+fn a_batch_runs_no_more_events_than_a_browser_sends() {
+    let (engine, rec) = engine_with(client_with(|_| {}), 204);
+    let lines: Vec<String> = (0..60).map(|i| format!("en=scroll&epn.n={i}")).collect();
+    let r = engine.run(ga4_hit("v=2&tid=G-TEST000001&cid=1.2", &lines.join("\n")));
+    assert_eq!(r.response.status, 204);
+    assert_eq!(r.events.len(), crate::mpv2::MAX_EVENTS);
+    assert_eq!(crate::mpv2::MAX_EVENTS, 25);
+    assert_eq!(rec.sent.lock().unwrap().len(), 25);
+}
+
+/// HMAC-SHA256 of `id` with `key`, as hex: what a site signs an id with.
+fn signed(id: &str, key: &str) -> String {
+    use hmac::{Hmac, KeyInit, Mac};
+    let mut mac = <Hmac<sha2::Sha256> as KeyInit>::new_from_slice(key.as_bytes()).unwrap();
+    mac.update(id.as_bytes());
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+#[test]
+fn a_signed_lookup_needs_the_sites_signature() {
+    const KEY: &str = "0123456789abcdef-signing-key";
+    let answer = r#"{"email":"jane@example.com"}"#;
+    let mut c = providers(&[META], Some("https://shop.example/api/visitor"));
+    let meta = c
+        .tags
+        .iter_mut()
+        .find(|t| t.template == "meta_capi")
+        .unwrap();
+    meta.data["enrich"]["signingKey"] = json!(KEY);
+    let (engine, rec) = engine_answering(c, 200, answer);
+
+    let lookups = || {
+        rec.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|o| o.url.starts_with("https://shop.example"))
+            .count()
+    };
+    // The e-mail Meta got with the latest purchase, if any.
+    let email = || {
+        bodies(&rec, "https://graph.facebook.com")
+            .last()
+            .map(|(_, b)| b["data"][0]["user_data"]["em"].clone())
+            .unwrap()
+    };
+    // Each run is its own order, for the visitor PURCHASE names.
+    let order = std::cell::Cell::new(0);
+    let run = |sig: Option<&str>| {
+        order.set(order.get() + 1);
+        let mut q = PURCHASE.replace(
+            "transaction_id=T1",
+            &format!("transaction_id=S{}", order.get()),
+        );
+        if let Some(sig) = sig {
+            q.push_str(&format!("&ep.user_id_sig={sig}"));
+        }
+        engine.run(meta_hit(&q))
+    };
+    let skipped = |r: &RunResult| {
+        r.logs
+            .iter()
+            .any(|l| l.contains("enrichment skipped: user_id_sig missing or wrong"))
+    };
+
+    // No signature, a wrong one, and a right one for somebody else: nothing
+    // is asked, and the conversion still goes out, without the extra fields.
+    for sig in [
+        None,
+        Some("deadbeef"),
+        Some(signed("someone-else", KEY).as_str()),
+        Some(signed("User@Example.com", "another-key-0123456789").as_str()),
+    ] {
+        let r = run(sig);
+        assert_eq!(r.tags[1].outcome, TagOutcome::Success, "{:?}", r.logs);
+        assert!(skipped(&r), "{sig:?}: {:?}", r.logs);
+        assert_eq!(lookups(), 0, "{sig:?}");
+        assert!(email().is_null(), "{sig:?}");
+    }
+
+    // The site's signature of this id: looked up once, and matched on.
+    let right = signed("User@Example.com", KEY);
+    let r = run(Some(&right));
+    assert!(!skipped(&r), "{:?}", r.logs);
+    assert_eq!(lookups(), 1);
+    assert_eq!(email()[0], sha_hex("jane@example.com"));
+    // Upper-case hex is the same signature; the answer is reused.
+    run(Some(&right.to_uppercase()));
+    assert_eq!(lookups(), 1);
+    assert_eq!(email()[0], sha_hex("jane@example.com"));
+
+    // The kept answer is not handed to a hit that can't show the signature.
+    let r = run(None);
+    assert!(skipped(&r));
+    assert!(email().is_null());
+    assert_eq!(lookups(), 1);
+}
+
+#[test]
+fn google_ads_reports_only_the_consent_the_hit_gave() {
+    let mut fields = GOOGLE_ADS.1.to_vec();
+    fields.push(("send_without_consent", "true"));
+    let (engine, rec) = engine_answering(
+        providers(&[("google_ads", fields.as_slice())], None),
+        200,
+        GOOGLE_ANSWER,
+    );
+    let order = std::cell::Cell::new(0);
+    // The consent Google was told for a purchase with these signals.
+    let told = |signals: &str| {
+        order.set(order.get() + 1);
+        let q = PURCHASE
+            .replace("&gcs=G111&gcd=13r3r3r2r5l1", signals)
+            .replace(
+                "transaction_id=T1",
+                &format!("transaction_id=C{}", order.get()),
+            );
+        let r = engine.run(with_cookie(
+            ga4_hit(&q, ""),
+            "_sst_ads=v1.gclid.1792900000.Cj0abc.d",
+        ));
+        let tag = r
+            .tags
+            .iter()
+            .find(|t| t.tag == "Google Ads conversions")
+            .unwrap();
+        assert_eq!(tag.outcome, TagOutcome::Success, "{signals}: {:?}", r.logs);
+        let sent = bodies(&rec, "https://datamanager.googleapis.com/v1/events:ingest");
+        assert_eq!(sent.len(), order.get(), "{signals}");
+        sent.last().unwrap().1.clone()
+    };
+
+    // A hit with no Consent Mode signals (a site without it, an order from
+    // a webhook): sent because the tag allows it, and nothing is claimed.
+    let body = told("");
+    assert!(body.get("consent").is_none(), "{body}");
+    // gcs knows ad_storage and analytics_storage only.
+    let body = told("&gcs=G111");
+    assert!(body.get("consent").is_none(), "{body}");
+    // ad_user_data granted, ad_personalization not set (the letter l).
+    let body = told("&gcd=13r3r3r2l5l1");
+    assert_eq!(body["consent"], json!({ "adUserData": "CONSENT_GRANTED" }));
+    // Both given: one granted, one denied.
+    let body = told("&gcd=13r3r3r2q5l1");
+    assert_eq!(
+        body["consent"],
+        json!({ "adUserData": "CONSENT_GRANTED", "adPersonalization": "CONSENT_DENIED" })
+    );
+}
+
+#[test]
+fn a_visitor_who_denied_analytics_is_forwarded_without_the_ip() {
+    let (engine, rec) = engine_with(client_with(|_| {}), 204);
+    // The last send's address and whether it carried the visitor's IP in
+    // a header.
+    let sent = |signals: &str| {
+        let r = engine.run(ga4_hit(
+            &format!("v=2&tid=G-TEST000001&cid=1.2&en=page_view{signals}"),
+            "",
+        ));
+        assert_eq!(
+            r.tags[0].outcome,
+            TagOutcome::Success,
+            "{signals}: {:?}",
+            r.logs
+        );
+        let out = rec.sent.lock().unwrap().last().unwrap().clone();
+        let header = out.headers.iter().any(|(k, _)| k == "x-forwarded-for");
+        (out.url, header)
+    };
+
+    // Denied by gcs (its last digit) or by gcd (its second letter).
+    for denied in [
+        "&gcs=G100",
+        "&gcs=G110",
+        "&gcd=13r3q3r2r5l1",
+        "&gcs=G111&gcd=13r3p3r2r5l1",
+    ] {
+        let (url, header) = sent(denied);
+        assert!(
+            !url.contains("_uip=") && !url.contains("203.0.113.9"),
+            "{denied}: {url}"
+        );
+        assert!(!header, "{denied}");
+        // The hit itself still goes, with its consent state and user agent.
+        assert!(
+            url.contains("en=page_view") && url.contains("_ua="),
+            "{denied}: {url}"
+        );
+    }
+    // Granted, or no signal at all: as before. gcd wins over gcs.
+    for granted in [
+        "",
+        "&gcs=G111",
+        "&gcd=13r3r3r2r5l1",
+        "&gcs=G100&gcd=13r3r3r2r5l1",
+    ] {
+        let (url, header) = sent(granted);
+        assert!(url.contains("_uip=203.0.113.9"), "{granted}: {url}");
+        assert!(header, "{granted}");
+    }
 }

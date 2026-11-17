@@ -19,11 +19,22 @@
 //                   list (the server warns about that at startup).
 //   siteDomains     Domains whose pages may send hits, subdomains included,
 //                   e.g. ['example.com']. Default: the server's own host.
-//   originCheck     'enforce', 'log' (default) or 'off'. A browser hit from
+//   originCheck     'enforce' (default), 'log' or 'off'. A browser hit from
 //                   this site carries an Origin or Referer on one of the site
 //                   domains. With 'enforce' other hits get
 //                   403 and are not forwarded; with 'log' they are forwarded
 //                   and logged, so you can see what enforcing would drop.
+//   dedupeTransactions
+//                   An event with a transaction_id is run once: the same
+//                   event name and transaction_id for the same property is
+//                   left out for a day, so a purchase sent again (a reload,
+//                   a replayed hit) isn't counted twice. Kept in this
+//                   instance's memory. On unless set to false.
+//   maxEventValue   Events whose `value` is a number beyond this, above or
+//                   below zero, are left out, so a made-up purchase can't
+//                   carry any amount. Checked on the value as the hit sent
+//                   it, in the event's own currency. Not set by default:
+//                   the right ceiling depends on the shop and its currency.
 //   keepCookies     Cookie groups to re-set from the server with their
 //                   platform's lifetime, so Safari's 7-day cap on cookies set
 //                   by scripts doesn't cut them short: google_analytics,
@@ -57,6 +68,10 @@
 // Bots: crawlers, headless browsers, automation tools and HTTP libraries
 // (curl, python, Go, Java, Node…), or hits with no user agent. CORS headers
 // are only sent back to this site's own origins.
+//
+// Events without a name, or with one longer than GA4's 40 characters, are
+// left out too. Whatever is left out is logged as events_rejected=<n>
+// reason=<why>, and the hit is still answered 204.
 const claimRequest = require('claimRequest');
 const decodeUriComponent = require('decodeUriComponent');
 const extractEventsFromMpv2 = require('extractEventsFromMpv2');
@@ -66,6 +81,7 @@ const getRequestQueryParameter = require('getRequestQueryParameter');
 const getTimestampMillis = require('getTimestampMillis');
 const isRequestMpv2 = require('isRequestMpv2');
 const logToConsole = require('logToConsole');
+const makeNumber = require('makeNumber');
 const makeString = require('makeString');
 const parseUrl = require('parseUrl');
 const returnResponse = require('returnResponse');
@@ -73,6 +89,8 @@ const runContainer = require('runContainer');
 const setCookie = require('setCookie');
 const setResponseHeader = require('setResponseHeader');
 const setResponseStatus = require('setResponseStatus');
+const sha256Sync = require('sha256Sync');
+const templateDataStorage = require('templateDataStorage');
 
 if (!isRequestMpv2()) return;
 const allowedIds = data.allowedMeasurementIds || [];
@@ -107,7 +125,7 @@ if (origin && isSite(originHost)) {
   setResponseHeader('access-control-allow-credentials', 'true');
 }
 
-const mode = data.originCheck || 'log';
+const mode = data.originCheck || 'enforce';
 if (mode !== 'off' && !isSite(originHost) && !isSite(refererHost)) {
   logToConsole('origin_check=' + (mode === 'enforce' ? 'rejected' : 'would_reject') +
     ' origin=' + (originHost || '-') + ' referer=' + (refererHost || '-'));
@@ -318,9 +336,41 @@ const utmSource = (url) => {
 };
 
 // A batched hit's lines can carry their own tid; drop events for other ids.
-const events = extractEventsFromMpv2().filter(
+const own = extractEventsFromMpv2().filter(
   (event) => anyId || allowedIds.indexOf(event['x-ga-measurement_id']) >= 0,
 );
+
+// Events a page of this site wouldn't send, or already sent, are left out
+// before any tag runs.
+const MAX_NAME = 40;
+const DEDUPE_MS = 86400000;
+const dedupe = data.dedupeTransactions !== false;
+const maxValue = makeNumber(data.maxEventValue);
+const startedAt = getTimestampMillis();
+const rejected = {};
+const reject = (why) => {
+  rejected[why] = (rejected[why] || 0) + 1;
+  return false;
+};
+const events = own.filter((event) => {
+  const name = event.event_name;
+  if (typeof name !== 'string' || !name || name.length > MAX_NAME || /[\u0000-\u001f\u007f]/.test(name)) {
+    return reject('event_name');
+  }
+  // A value sent as text counts as the number the tags would read from it.
+  const value = event.value === undefined || event.value === null || event.value === '' ? undefined : makeNumber(event.value);
+  if (maxValue > 0 && value !== undefined && (value > maxValue || value < -maxValue)) return reject('value');
+  const tx = event.transaction_id;
+  if (dedupe && tx !== undefined && tx !== null && tx !== '') {
+    // By property too: a site with two GA4 properties sends each its own hit.
+    const key = 'tx:' + sha256Sync(makeString(event['x-ga-measurement_id']) + '\n' + name + '\n' + makeString(tx));
+    const seen = templateDataStorage.getItemCopy(key);
+    if (seen && startedAt - seen < DEDUPE_MS) return reject('duplicate_transaction');
+    templateDataStorage.setItemCopy(key, startedAt);
+  }
+  return true;
+});
+for (const why in rejected) logToConsole('events_rejected=' + rejected[why] + ' reason=' + why);
 events.forEach((event) => {
   event.page_location = restoreClickIds(event.page_location);
   if (data.visitorInfo === true) {

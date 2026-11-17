@@ -68,7 +68,11 @@ jobs:
         run: |
           docker run -d --name ts -p 8080:8080 -e MEASUREMENT_IDS=G-TEST000001 tagging-server
           for i in $(seq 1 30); do curl -sf http://localhost:8080/health && break; sleep 1; done
-          code=$(curl -s -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' \
+          # A hit from a page of the site itself; one from nowhere is refused.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' -H 'Origin: http://localhost:8080' \
+            'http://localhost:8080/g/collect?v=2&tid=G-TEST000001&cid=1.2&en=page_view&dl=https%3A%2F%2Fexample.com%2F')
+          refused=$(curl -s -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' \
             'http://localhost:8080/g/collect?v=2&tid=G-TEST000001&cid=1.2&en=page_view&dl=https%3A%2F%2Fexample.com%2F')
           docker logs ts
           test "$code" = 204
+          test "$refused" = 403

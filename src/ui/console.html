@@ -1216,10 +1216,10 @@ const STRINGS = {
     'ft.bots.switch.help': 'Off: bot hits are dropped.',
     'ft.strip.name': 'Strip user data from GA4',
     'ft.strip.line': 'Drops plain e-mail, phone and address from what GA4 receives; hashed values stay.',
-    'ft.strip.how': 'A setting of the GA4 tag: turn it on in the tag’s settings, in a site’s settings, or with STRIP_USER_DATA=1 for the built-in container.',
+    'ft.strip.how': 'A setting of the GA4 tag, on unless turned off: in the tag’s settings, in a site’s settings, or with STRIP_USER_DATA=0 for the built-in container.',
     'ft.origin.name': 'Origin check',
     'ft.origin.line': 'Refuses or logs hits that don’t come from your own site.',
-    'ft.origin.how': 'Set the GA4 client’s originCheck to enforce, log or off; ORIGIN_CHECK for the built-in container, or in a site’s settings. Start with log and check the request log for origin_check=would_reject before enforcing.',
+    'ft.origin.how': 'Set the GA4 client’s originCheck to enforce, log or off; ORIGIN_CHECK for the built-in container, or in a site’s settings. It is enforced unless set otherwise; to watch first, use log and check the request log for origin_check=would_reject.',
     'ft.origin.enforce': 'Enforced',
     'ft.origin.log': 'Logging only',
     'ft.platforms.name': 'Server-side ad platforms',
@@ -1688,6 +1688,9 @@ const STRINGS = {
     'enr.headerName': 'Auth header name (optional)',
     'enr.headerName.placeholder': 'x-api-key',
     'enr.headerValue': 'Auth header value',
+    'enr.signed': 'Only look up IDs your site has signed',
+    'enr.signed.help': 'Without this, anyone who sends a hit picks whose details are looked up. Your site sends user_id_sig (or client_id_sig) with the event: the HMAC-SHA256 of the ID with the key below, as hex.',
+    'enr.signingKey': 'Signing key (16 characters or more)',
     'enr.use': 'Use enrichment',
     'enr.save': 'Save enrichment',
     'enr.saved': 'Enrichment saved',
@@ -2104,10 +2107,10 @@ const STRINGS = {
     'ft.bots.switch.help': 'Kapalı: bot hit’leri atılır.',
     'ft.strip.name': 'GA4’ten kullanıcı verisini çıkar',
     'ft.strip.line': 'GA4’e gidenlerden düz e-posta, telefon ve adresi çıkarır; hash’lenmiş değerler kalır.',
-    'ft.strip.how': 'GA4 tag’inin bir ayarıdır: tag’in ayarlarından, sitenin ayarlarından ya da yerleşik container için STRIP_USER_DATA=1 ile açın.',
+    'ft.strip.how': 'GA4 tag’inin bir ayarıdır ve kapatılmadıkça açıktır: tag’in ayarlarından, sitenin ayarlarından ya da yerleşik container için STRIP_USER_DATA=0 ile kapatılır.',
     'ft.origin.name': 'Kaynak kontrolü',
     'ft.origin.line': 'Kendi sitenizden gelmeyen hit’leri reddeder ya da kaydeder.',
-    'ft.origin.how': 'GA4 client’ının originCheck ayarını enforce, log ya da off yapın; yerleşik container için ORIGIN_CHECK, ya da sitenin ayarları. Önce log ile başlayın ve zorlamadan önce istek kaydında origin_check=would_reject satırlarına bakın.',
+    'ft.origin.how': 'GA4 client’ının originCheck ayarını enforce, log ya da off yapın; yerleşik container için ORIGIN_CHECK, ya da sitenin ayarları. Başka bir değer verilmedikçe zorlanır; önce izlemek için log seçip istek kaydında origin_check=would_reject satırlarına bakın.',
     'ft.origin.enforce': 'Zorlanıyor',
     'ft.origin.log': 'Yalnızca kayıt',
     'ft.platforms.name': 'Sunucu taraflı reklam platformları',
@@ -2572,6 +2575,9 @@ const STRINGS = {
     'enr.headerName': 'Kimlik doğrulama header adı (isteğe bağlı)',
     'enr.headerName.placeholder': 'x-api-key',
     'enr.headerValue': 'Kimlik doğrulama header değeri',
+    'enr.signed': 'Yalnızca sitenizin imzaladığı ID’leri sorgula',
+    'enr.signed.help': 'Bu kapalıyken, hit gönderen herkes kimin bilgilerinin sorgulanacağını seçebilir. Siteniz event ile birlikte user_id_sig (ya da client_id_sig) gönderir: ID’nin aşağıdaki anahtarla hesaplanan HMAC-SHA256 değeri, hex olarak.',
+    'enr.signingKey': 'İmzalama anahtarı (en az 16 karakter)',
     'enr.use': 'Zenginleştirmeyi kullan',
     'enr.save': 'Zenginleştirmeyi kaydet',
     'enr.saved': 'Zenginleştirme kaydedildi',
@@ -6625,7 +6631,7 @@ VIEWS.container = {
     const en = switchRow('ed-en', t('ed.f.enabled'), t('ed.f.enabled.help'), init ? init.enabled !== false : true);
     // The GA4 tag's stripUserData gets its own switch instead of a settings row.
     const isGa4 = () => tplSel.value === 'ga4_tag';
-    const strip = switchRow('ed-strip', t('strip.name'), t('strip.help'), !!(init && init.template === 'ga4_tag' && init.data && init.data.stripUserData === true));
+    const strip = switchRow('ed-strip', t('strip.name'), t('strip.help'), !(init && init.template === 'ga4_tag' && init.data && init.data.stripUserData === false));
     const syncStrip = () => { strip.el.hidden = !isGa4(); };
     tplSel.addEventListener('change', syncStrip);
     strip.sw.addEventListener('click', () => { ed.dirty = true; });
@@ -6848,7 +6854,8 @@ VIEWS.container = {
       const fw = [];
       for (const r of conds) { const x = r.collect(); if (x.bad) bad.push(x.bad); else fw.push(x.cond); }
       if (bad.length) { formError(t('ed.err.fix')); bad[0].focus(); return; }
-      if (isGa4()) { if (strip.sw.getAttribute('aria-checked') === 'true') data.stripUserData = true; else delete data.stripUserData; }
+      // The tag strips unless told not to, so only "off" is written.
+      if (isGa4()) { if (strip.sw.getAttribute('aria-checked') === 'true') delete data.stripUserData; else data.stripUserData = false; }
       const tag = { name: name, template: tplSel.value, data: data, fire_when: fw, enabled: en.sw.getAttribute('aria-checked') === 'true' };
       save.disabled = true; save.setAttribute('aria-busy', 'true');
       try {
@@ -7004,10 +7011,10 @@ VIEWS.sites = {
     const fName = h('input', { class: 'input', type: 'text', autocomplete: 'off', value: tt ? tt.name : '' });
     const fHosts = ta(tt && tt.hosts), fMids = ta(tt && tt.measurement_ids), fSids = ta(tt && tt.script_ids), fDom = ta(tt && tt.site_domains);
     const fOrigin = h('select', { class: 'select' }, ['log', 'enforce', 'off'].map((v) => h('option', { value: v }, t('sites.f.origin.' + v))));
-    fOrigin.value = tt ? tt.origin_check : 'log';
+    fOrigin.value = tt ? tt.origin_check : 'enforce';
     const sw = h('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(tt ? tt.enabled : true), 'aria-labelledby': 'sf-en-n', 'aria-describedby': 'sf-en-d' });
     sw.addEventListener('click', () => sw.setAttribute('aria-checked', String(sw.getAttribute('aria-checked') !== 'true')));
-    const strip = h('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(!!(tt && tt.strip_user_data)), 'aria-labelledby': 'sf-strip-n', 'aria-describedby': 'sf-strip-d' });
+    const strip = h('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(tt ? !!tt.strip_user_data : true), 'aria-labelledby': 'sf-strip-n', 'aria-describedby': 'sf-strip-d' });
     strip.addEventListener('click', () => strip.setAttribute('aria-checked', String(strip.getAttribute('aria-checked') !== 'true')));
     const req = ' ' + t('sites.f.required');
     const save = h('button', { class: 'button', 'data-variant': 'primary', type: 'submit' }, t('sites.save'));
@@ -7098,8 +7105,8 @@ function featureList(c, tenant) {
     { group: 'ft.g.visitors', key: 'visitor', edit: 'client', state: f.visitor_info ? on() : off() },
     { group: 'ft.g.visitors', key: 'ai', edit: 'client', state: f.visitor_info ? on() : off() },
     { group: 'ft.g.visitors', key: 'bots', edit: 'client', state: f.bot_handling === 'flag' ? on(t('ft.bots.flagged')) : off(t('ft.bots.dropped')) },
-    { group: 'ft.g.privacy', key: 'strip', go: S.mode === 'multi' ? 'sites' : 'container', state: gaTag && (gaTag.data || {}).stripUserData ? on() : off() },
-    { group: 'ft.g.privacy', key: 'origin', go: S.mode === 'multi' ? 'sites' : null, state: d.originCheck === 'enforce' ? on(t('ft.origin.enforce')) : d.originCheck === 'off' ? off() : on(t('ft.origin.log')) },
+    { group: 'ft.g.privacy', key: 'strip', go: S.mode === 'multi' ? 'sites' : 'container', state: gaTag && (gaTag.data || {}).stripUserData !== false ? on() : off() },
+    { group: 'ft.g.privacy', key: 'origin', go: S.mode === 'multi' ? 'sites' : null, state: d.originCheck === 'off' ? off() : d.originCheck === 'log' ? on(t('ft.origin.log')) : on(t('ft.origin.enforce')) },
     { group: 'ft.g.platforms', key: 'platforms', go: aiOn() ? 'setup' : 'container', state: ads.length ? on(ads.map((x) => x.name).join(', ')) : off() },
     { group: 'ft.g.platforms', key: 'transform', go: 'transformations', state: rules.length ? on(t('ft.transform.n', { n: rules.length })) : off() },
     { group: 'ft.g.safety', key: 'drafts', state: svc.drafts ? on() : setup() },
@@ -7405,6 +7412,8 @@ VIEWS.integrations = {
     const hv = h('input', { class: 'input', 'data-mono': true, id: 'enr-hv', type: 'password', autocomplete: 'off', placeholder: e.header_value_set ? t('int.secretKept') : null, 'aria-describedby': e.header_value_set ? 'enr-hv-h' : null });
     const en = switchRow('enr-enabled', t('enr.use'), null, e.enabled);
     const eud = switchRow('enr-eud', t('enr.eventUserData'), t('enr.eventUserData.help'), !!e.event_user_data);
+    const signed = switchRow('enr-signed', t('enr.signed'), t('enr.signed.help'), !!e.require_signature);
+    const sk = h('input', { class: 'input', 'data-mono': true, id: 'enr-sk', type: 'password', autocomplete: 'off', placeholder: e.signing_key_set ? t('int.secretKept') : null, 'aria-describedby': e.signing_key_set ? 'enr-sk-h' : null });
     const msg = h('p', { class: 'message', 'aria-live': 'polite' });
     const save = h('button', { class: 'button', 'data-variant': 'primary', type: 'submit' }, t('enr.save'));
     const form = h('form', { class: 'panel', id: 'int-enrichment', novalidate: true, 'aria-label': t('enr.title') },
@@ -7414,13 +7423,15 @@ VIEWS.integrations = {
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'enr-key', text: t('enr.key') }), key),
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'enr-hn', text: t('enr.headerName') }), hn),
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'enr-hv', text: t('enr.headerValue') }), hv, e.header_value_set ? h('span', { class: 'field__hint', id: 'enr-hv-h', text: t('int.secretKept') }) : null),
+        signed.el,
+        h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'enr-sk', text: t('enr.signingKey') }), sk, e.signing_key_set ? h('span', { class: 'field__hint', id: 'enr-sk-h', text: t('int.secretKept') }) : null),
         en.el, msg, h('div', { class: 'form-actions' }, save)));
     form.addEventListener('submit', async (ev) => {
       ev.preventDefault();
       clear(msg);
       save.disabled = true; save.setAttribute('aria-busy', 'true');
       try {
-        S.integrations = await api('PUT', '/admin/api/enrichment', { enabled: en.sw.getAttribute('aria-checked') === 'true', url: url.value.trim(), key: key.value, header_name: hn.value.trim(), header_value: hv.value.trim(), event_user_data: eud.sw.getAttribute('aria-checked') === 'true' });
+        S.integrations = await api('PUT', '/admin/api/enrichment', { enabled: en.sw.getAttribute('aria-checked') === 'true', url: url.value.trim(), key: key.value, header_name: hn.value.trim(), header_value: hv.value.trim(), event_user_data: eud.sw.getAttribute('aria-checked') === 'true', require_signature: signed.sw.getAttribute('aria-checked') === 'true', signing_key: sk.value.trim() });
         S.containers.clear();
         toast('ok', t('enr.saved'));
         this.render();

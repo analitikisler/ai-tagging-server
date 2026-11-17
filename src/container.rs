@@ -158,6 +158,9 @@ pub struct Settings {
     /// The GA4 tag's `stripUserData`: drop plain user-provided data before
     /// forwarding to Google.
     pub strip_user_data: bool,
+    /// The GA4 client's `maxEventValue`: events whose value is beyond it
+    /// are left out. None sets no ceiling.
+    pub max_event_value: Option<f64>,
     /// The GA4 client's optional features.
     pub features: crate::features::Features,
 }
@@ -168,8 +171,9 @@ impl Default for Settings {
             script_ids: vec![],
             measurement_ids: vec![],
             site_domains: vec![],
-            origin_check: "log".into(),
-            strip_user_data: false,
+            origin_check: "enforce".into(),
+            strip_user_data: true,
+            max_event_value: None,
             features: Default::default(),
         }
     }
@@ -219,6 +223,9 @@ impl Container {
                         });
                         if let Some(m) = data.as_object_mut() {
                             m.extend(s.features.client_data());
+                            if let Some(max) = s.max_event_value {
+                                m.insert("maxEventValue".into(), serde_json::json!(max));
+                            }
                         }
                         data
                     },
@@ -232,10 +239,11 @@ impl Container {
             tags: vec![Tag {
                 name: "GA4".into(),
                 template: "ga4_tag".into(),
+                // The tag strips unless told not to, so only "off" is written.
                 data: if s.strip_user_data {
-                    serde_json::json!({ "stripUserData": true })
-                } else {
                     empty_object()
+                } else {
+                    serde_json::json!({ "stripUserData": false })
                 },
                 fire_when: vec![],
                 enabled: true,

@@ -21,7 +21,7 @@ use crate::integrations::{Kind, PROVIDERS};
 /// The settings of each built-in template, for the prompt.
 fn settings_list() -> String {
     let mut out = String::from(
-        "- ga4_tag: no required settings (forwards GA4 hits as they came); stripUserData (true drops plain user data before forwarding).\n",
+        "- ga4_tag: no required settings (forwards GA4 hits as they came); stripUserData (plain user data is dropped before forwarding unless this is false).\n",
     );
     for p in PROVIDERS {
         let fields: Vec<String> = p

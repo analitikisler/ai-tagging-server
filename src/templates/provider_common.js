@@ -8,6 +8,7 @@ const getEventData = require('getEventData');
 const getCookieValues = require('getCookieValues');
 const sendHttpRequest = require('sendHttpRequest');
 const sha256Sync = require('sha256Sync');
+const hmacSha256 = require('hmacSha256');
 const getTimestampMillis = require('getTimestampMillis');
 const encodeUriComponent = require('encodeUriComponent');
 const parseUrl = require('parseUrl');
@@ -163,6 +164,12 @@ const eventItems = () => {
 // Values may be plain or already SHA-256 hashed. Answers are kept for five
 // minutes in storage the ad tags share, so all of them use one lookup. A slow or failing endpoint never stops the conversion from being
 // sent: the tag just goes without the extra fields.
+//
+// The id comes with the hit, so whoever sends a hit picks whose details are
+// asked for. With `signingKey` set, an id counts only with the site's own
+// signature: the event's `user_id_sig` (or `client_id_sig`), the
+// HMAC-SHA256 of the id with that key, as hex. Without a right signature
+// nothing is looked up, kept answers included.
 const ENRICH_TTL_MS = 300000;
 const lookupExtra = (done) => {
   const cfg = data.enrich;
@@ -172,6 +179,28 @@ const lookupExtra = (done) => {
     done({});
     return;
   }
+  if (!cfg.signingKey) {
+    lookupVisitor(cfg, keyName, id, done);
+    return;
+  }
+  const unsigned = () => {
+    logToConsole('enrichment skipped: ' + keyName + '_sig missing or wrong');
+    done({});
+  };
+  const given = getEventData(keyName + '_sig');
+  if (typeof given !== 'string' || !given) {
+    unsigned();
+    return;
+  }
+  hmacSha256(makeString(id), makeString(cfg.signingKey), (expected) => {
+    // Compares digests of both values, so the time taken says nothing about
+    // how much of a guessed signature was right.
+    const digest = (v) => sha256Sync(v, { outputEncoding: 'hex' });
+    if (digest(given.trim().toLowerCase()) !== digest(expected)) unsigned();
+    else lookupVisitor(cfg, keyName, id, done);
+  }, undefined, { outputEncoding: 'hex' });
+};
+const lookupVisitor = (cfg, keyName, id, done) => {
   const cacheKey = 'enrich:' + keyName + ':' + id;
   const cached = templateDataStorage.getItemCopy(cacheKey);
   if (cached && now - cached.t < ENRICH_TTL_MS) {

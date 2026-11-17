@@ -8,10 +8,14 @@
 //
 // Fields:
 //   endpoint        Collection URL. Default https://www.google-analytics.com/g/collect
-//   stripUserData   true drops plain user-provided data (`ep.user_data.*` and
+//   stripUserData   Drops plain user-provided data (`ep.user_data.*` and
 //                   `epn.user_data.*` whose last key isn't `sha256_…`) before
 //                   forwarding. SHA-256 digests and the Google tag's `em`
-//                   envelope are kept. Default false.
+//                   envelope are kept. On unless set to false.
+//
+// A visitor who denied analytics_storage (Consent Mode: gcd's second letter,
+// or gcs "G1x0") is forwarded without the IP address: Google still gets the
+// cookieless hit, and places it by this server's address instead.
 const decodeUriComponent = require('decodeUriComponent');
 const encodeUriComponent = require('encodeUriComponent');
 const getAllEventData = require('getAllEventData');
@@ -72,16 +76,28 @@ for (const key in event) {
   else if (BUILT.indexOf(key) < 0) synced.push(param(getType(event[key]) === 'number' ? 'epn.' : 'ep.', key, event[key]));
 }
 
+// analytics_storage as the hit gave it: gcd's second letter (p, q, m and u
+// are denied), else the last digit of gcs.
+const analyticsDenied = () => {
+  const gcd = event['x-ga-gcd'];
+  const c = typeof gcd === 'string' ? gcd.replace(/[^a-z]/g, '').charAt(1) : '';
+  if (c && 'tnrv'.indexOf(c) >= 0) return false;
+  if (c && 'pqmu'.indexOf(c) >= 0) return true;
+  const gcs = event['x-ga-gcs'];
+  return typeof gcs === 'string' && /^G1[01]0/.test(gcs);
+};
+const ip = analyticsDenied() ? undefined : event.ip_override;
+
 const params = synced
   .filter((p) => p.indexOf('_uip=') !== 0 && p.indexOf('_ua=') !== 0)
-  .filter((p) => !(data.stripUserData === true && plainUserData(p)));
-if (event.ip_override) params.push('_uip=' + encodeUriComponent(event.ip_override));
+  .filter((p) => !(data.stripUserData !== false && plainUserData(p)));
+if (ip) params.push('_uip=' + encodeUriComponent(ip));
 if (event.user_agent) params.push('_ua=' + encodeUriComponent(event.user_agent));
 
 const endpoint = data.endpoint || 'https://www.google-analytics.com/g/collect';
 const headers = {};
 if (event.user_agent) headers['user-agent'] = event.user_agent;
-if (event.ip_override) headers['x-forwarded-for'] = event.ip_override;
+if (ip) headers['x-forwarded-for'] = ip;
 
 sendHttpRequest(endpoint + '?' + params.join('&'), { method: 'POST', headers: headers }, '')
   .then((res) => {

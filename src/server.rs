@@ -29,6 +29,20 @@ use crate::tenants::{Resolved, Tenants};
 use crate::traces::{self, Outcome};
 
 const MAX_BODY: usize = 1024 * 1024;
+/// Most of a tracking hit's body: a batch of GA4 events. Google's own
+/// Measurement Protocol stops at 130 kB; every tag reads the request, so a
+/// larger body costs each of them its size.
+const MAX_COLLECT_BODY: usize = 256 * 1024;
+
+/// The largest body read for a path: hits (`/g/collect` and the like) get
+/// less than webhooks, such as a Shopify order.
+fn body_limit(path: &str) -> usize {
+    if path.ends_with("/collect") {
+        MAX_COLLECT_BODY
+    } else {
+        MAX_BODY
+    }
+}
 
 /// The only address requests carrying the server's Google token may go to.
 const BIGQUERY_API: &str = "https://bigquery.googleapis.com/";
@@ -488,7 +502,7 @@ async fn handle(
     req: Request<Body>,
 ) -> Response {
     let (parts, body) = req.into_parts();
-    let Ok(body) = to_bytes(body, MAX_BODY).await else {
+    let Ok(body) = to_bytes(body, body_limit(parts.uri.path())).await else {
         return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
     };
 
@@ -937,6 +951,64 @@ mod tests {
     }
 
     #[test]
+    fn hits_get_a_smaller_body_than_webhooks() {
+        for path in ["/g/collect", "/mp/collect", "/j/collect", "/collect"] {
+            assert_eq!(body_limit(path), MAX_COLLECT_BODY, "{path}");
+        }
+        for path in ["/shopify/orders", "/gtm.js", "/collector", "/"] {
+            assert_eq!(body_limit(path), MAX_BODY, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_oversized_hit_is_refused_before_any_template_runs() {
+        let app = App {
+            pool: Pool::for_tests(),
+            target: Target::Single(ContainerFile::fixed(
+                crate::container::Container::builtin(),
+                Default::default(),
+                Default::default(),
+            )),
+            admin: None,
+            debug_token: None,
+            proxy_secret: None,
+            counts: None,
+            identify: false,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router(app).into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+        });
+        let http = reqwest::Client::new();
+        let post = |path: &str, bytes: usize| {
+            http.post(format!("{base}{path}"))
+                .header("user-agent", "Mozilla/5.0 Chrome/141.0")
+                .header("origin", base.as_str())
+                .body("a".repeat(bytes))
+                .send()
+        };
+        // A batch within the limit is run; one past it is not read.
+        let ok = post("/g/collect?v=2&tid=G-1&cid=1.2&en=page_view", 0).await;
+        assert_eq!(ok.unwrap().status(), 204);
+        let big = post(
+            "/g/collect?v=2&tid=G-1&cid=1.2&en=page_view",
+            MAX_COLLECT_BODY + 1,
+        )
+        .await;
+        assert_eq!(big.unwrap().status(), 413);
+        // A webhook of that size is still read (and here, claimed by nobody).
+        let hook = post("/shopify/orders", MAX_COLLECT_BODY + 1).await;
+        assert_eq!(hook.unwrap().status(), 400);
+        let huge = post("/shopify/orders", MAX_BODY + 1).await;
+        assert_eq!(huge.unwrap().status(), 413);
+    }
+
+    #[test]
     fn strips_debug_param() {
         assert_eq!(
             take_debug_param("v=2&__debug=abc&en=x"),
@@ -1059,7 +1131,9 @@ mod tests {
                 .get(format!(
                     "{base}/g/collect?v=2&tid=G-1&cid=1.2&en=page_view&dl={dl}"
                 ))
-                .header("user-agent", "Mozilla/5.0 Chrome/141.0");
+                .header("user-agent", "Mozilla/5.0 Chrome/141.0")
+                // A page of the site itself, as the origin check wants.
+                .header("origin", base.as_str());
             if let Some(c) = cookie {
                 r = r.header("cookie", c);
             }

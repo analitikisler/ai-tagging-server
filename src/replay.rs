@@ -538,6 +538,7 @@ mod tests {
                 headers: vec![
                     ("user-agent".into(), "Mozilla/5.0 Test".into()),
                     ("host".into(), "example.com".into()),
+                    ("origin".into(), "https://example.com".into()),
                 ],
                 remote_address: "203.0.113.9".into(),
                 ..Default::default()
