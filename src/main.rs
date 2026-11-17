@@ -336,6 +336,7 @@ async fn main() {
         None => state::State::memory(),
     });
     let history = Arc::new(history::History::new(state.clone()));
+    history.expire_secrets();
     let counts = admin_token
         .is_some()
         .then(|| Arc::new(counts::Recorder::new(state.clone())));

@@ -15,7 +15,7 @@ use std::sync::LazyLock;
 
 use serde_json::{Value, json};
 
-use super::{Ai, AiError, Ask, language, server_prompt};
+use super::{Ai, AiError, Ask, known_addresses, language, new_address, server_prompt};
 use crate::integrations::{Kind, PROVIDERS};
 
 /// The settings of each built-in template, for the prompt.
@@ -191,6 +191,16 @@ pub async fn propose(
         }
         let loaded = parse_list(&text("tags_json"), "tags_json").and_then(|tags| {
             let rules = parse_list(&text("transformations_json"), "transformations_json")?;
+            // An address must be the container's own or the description's.
+            let known = known_addresses(container);
+            for tag in tags.as_array().into_iter().flatten() {
+                if let Some(address) = new_address(&tag["data"], &known, request) {
+                    return Err(format!(
+                        "tag {}: {address} is an address neither the container nor the description has; leave addresses as they are",
+                        tag["name"]
+                    ));
+                }
+            }
             check(&tags, &rules)?;
             Ok((tags, rules))
         });

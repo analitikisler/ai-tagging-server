@@ -398,6 +398,9 @@ pub(crate) const PREVIEW_MS: u64 = 4 * 3_600_000;
 /// code isn't hidden by the cookie an earlier preview left; a code whose
 /// session is gone or too old gives way to the next one.
 fn preview_of(a: &Admin, req: &IncomingRequest) -> Option<(String, bool)> {
+    // Only a draft can be previewed. Anyone can put a code on a hit, so
+    // looking one up reads nothing: the sessions are kept in memory.
+    let drafts = a.drafts.as_ref()?;
     let code_after = |text: &str, marker: &str| -> Option<String> {
         let at = text.find(marker)? + marker.len();
         let code: String = text[at..].chars().take(8).collect();
@@ -410,18 +413,14 @@ fn preview_of(a: &Admin, req: &IncomingRequest) -> Option<(String, bool)> {
             .and_then(|c| code_after(c, &format!("{PREVIEW_COOKIE}="))),
     ];
     for code in codes.into_iter().flatten() {
-        let Some(s) = a.state.read(&format!("checkup/live-{code}.json")) else {
+        let Some(s) = drafts.session(&code) else {
             continue;
         };
-        let fresh = s["since"]
-            .as_u64()
-            .is_some_and(|t| t + PREVIEW_MS > crate::state::now_ms());
-        if !fresh {
+        if s.since + PREVIEW_MS <= crate::state::now_ms() {
             continue;
         }
         // A live check that isn't a preview runs the live container.
-        return (s["preview"] == serde_json::json!(true))
-            .then(|| (code, s["send"] != serde_json::json!(true)));
+        return s.preview.then_some((code, !s.send));
     }
     None
 }
@@ -689,6 +688,11 @@ async fn handle(
             res.headers_mut().append(k, v);
         }
     }
+    // A script is run as a script and a pixel shown as a pixel, whatever
+    // their bytes look like to a browser that guesses.
+    res.headers_mut()
+        .entry(axum::http::header::X_CONTENT_TYPE_OPTIONS)
+        .or_insert(HeaderValue::from_static("nosniff"));
     if app.identify {
         res.headers_mut().insert(
             HeaderName::from_static(SERVER_HEADER.0),
@@ -1033,8 +1037,9 @@ mod tests {
                 .send()
         };
         // A batch within the limit is run; one past it is not read.
-        let ok = post(PAGE_VIEW, 0).await;
-        assert_eq!(ok.unwrap().status(), 204);
+        let ok = post(PAGE_VIEW, 0).await.unwrap();
+        assert_eq!(ok.status(), 204);
+        assert_eq!(ok.headers()["x-content-type-options"], "nosniff");
         let big = post(PAGE_VIEW, MAX_COLLECT_BODY + 1).await;
         assert_eq!(big.unwrap().status(), 413);
         // A webhook of that size is still read (and here, claimed by nobody).

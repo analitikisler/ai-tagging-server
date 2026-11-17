@@ -502,6 +502,38 @@ const IP_HEADERS: &[&str] = &[
     "x-client-ip",
     "fastly-client-ip",
 ];
+/// The request headers the AI is given: the ones that explain how a hit was
+/// handled (the origin check, bot handling, consent, cookies by name, the
+/// proxy's host and place, a webhook's topic). A hit's sender chooses its
+/// headers, so the rest is left out and each value is cut short.
+const AI_HEADERS: &[&str] = &[
+    "host",
+    "origin",
+    "referer",
+    "user-agent",
+    "cookie",
+    "content-type",
+    "content-length",
+    "accept-language",
+    "sec-fetch-mode",
+    "sec-fetch-site",
+    "sec-fetch-dest",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "signature-agent",
+    "x-forwarded-host",
+    "x-forwarded-prefix",
+    "x-sst-geo-country",
+    "x-sst-geo-region",
+    "x-sst-geo-city",
+    "x-sst-geo-postal-code",
+    "cf-ipcountry",
+    "x-shopify-topic",
+    "x-shopify-shop-domain",
+];
+/// Most characters of a header's value the AI is given.
+const AI_HEADER_VALUE: usize = 300;
 /// Event data keys and hit parameters that carry the visitor's IP address.
 pub const IP_KEYS: &[&str] = &["ip_override", "ip", "client_ip", "uip", "_uip"];
 /// Most of a request body the AI is given.
@@ -523,8 +555,16 @@ pub fn for_ai(record: &Record) -> Value {
     if let Some(headers) = req["headers"].as_array_mut() {
         headers.retain(|h| {
             let name = h[0].as_str().unwrap_or_default().to_ascii_lowercase();
-            !IP_HEADERS.contains(&name.as_str())
+            AI_HEADERS.contains(&name.as_str()) && !IP_HEADERS.contains(&name.as_str())
         });
+        for h in headers.iter_mut() {
+            if let Some(v) = h[1]
+                .as_str()
+                .filter(|v| v.chars().count() > AI_HEADER_VALUE)
+            {
+                h[1] = json!(v.chars().take(AI_HEADER_VALUE).collect::<String>());
+            }
+        }
     }
     if let Some(q) = req["query"].as_str() {
         req["query"] = json!(drop_params(q, IP_KEYS));

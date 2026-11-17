@@ -1042,6 +1042,7 @@ const STRINGS = {
     'hist.memory': 'History is kept in this instance’s memory. Set STATE_DIR so every instance shares it and it survives restarts.',
     'hist.undo': 'Undo',
     'hist.undone': 'Change undone.',
+    'hist.secretsExpired': 'Older than 30 days, so its tokens and keys are no longer kept. Undo keeps the ones each tag has now and leaves the others empty.',
     'hist.source.console': 'console',
     'hist.source.integrations': 'Integrations',
     'pin.title': 'Pinned test hits',
@@ -1933,6 +1934,7 @@ const STRINGS = {
     'hist.memory': 'Geçmiş bu instance’ın belleğinde tutuluyor. Her instance’ın paylaşması ve yeniden başlatmada kaybolmaması için STATE_DIR ayarlanır.',
     'hist.undo': 'Geri al',
     'hist.undone': 'Değişiklik geri alındı.',
+    'hist.secretsExpired': '30 günden eski olduğu için token ve anahtarları artık saklanmıyor. Geri alındığında her tag şu anki değerlerini korur, diğerleri boş kalır.',
     'hist.source.console': 'konsol',
     'hist.source.integrations': 'Entegrasyonlar',
     'pin.title': 'Sabitlenmiş test hit’leri',
@@ -5692,7 +5694,8 @@ VIEWS.history = {
       list.appendChild(h('li', null, h('span', { class: 'tag', 'data-variant': 'plain', text: t('hist.source.' + e.source) }),
         h('span', { class: 'stack gap-1' }, h('span', { class: 'meta', text: stamp(e.at) }),
           e.name ? h('span', { class: 'strong', text: e.name }) : null, e.note ? h('span', { class: 'note', text: e.note }) : null,
-          (e.edits || []).map((x) => h('span', null, editSentence(x))), acts.childNodes.length ? acts : null)));
+          (e.edits || []).map((x) => h('span', null, editSentence(x))),
+          e.secrets_expired && e.undoable ? h('span', { class: 'note', text: t('hist.secretsExpired') }) : null, acts.childNodes.length ? acts : null)));
     }
     box.appendChild(panel(t('hist.title'), HI.data.entries.length ? list : h('p', { class: 'note', text: t('hist.empty') })));
     const pins = h('ul', { class: 'ai-list' });

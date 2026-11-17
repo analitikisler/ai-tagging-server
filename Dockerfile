@@ -1,5 +1,6 @@
 # Static musl binary on an empty image.
-FROM rust:1-slim-bookworm AS build
+# The digest names the exact image; Dependabot moves it to newer ones.
+FROM rust:1-slim-bookworm@sha256:7c7d4eb4d05b7781187a327809466cfddf29753f6defdc3d19a0e291951b7a37 AS build
 RUN apt-get update && apt-get install -y --no-install-recommends musl-tools ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup target add "$(uname -m)-unknown-linux-musl"

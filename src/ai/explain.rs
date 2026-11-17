@@ -109,7 +109,7 @@ pub(super) fn check(answer: &Value, container: &Value, id: u64, model: &str) -> 
                 "detail": text(f, "detail"),
                 "tag": text(f, "tag"),
                 "fix": text(f, "fix"),
-                "change": parse_change(f["tag_json"].as_str().unwrap_or_default(), &names),
+                "change": parse_change(f["tag_json"].as_str().unwrap_or_default(), container),
             })
         })
         .collect();

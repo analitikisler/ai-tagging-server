@@ -205,10 +205,42 @@ async fn gate(
         && path != "/admin/api/alerts/check"
         && let Err(r) = authorize(&a, req.headers()).await
     {
-        return *r;
+        return guarded(*r);
     }
-    next.run(req).await
+    guarded(next.run(req).await)
 }
+
+/// Every answer of the console and its API: read as the type it says it is,
+/// and its address never passed on to another site in a `Referer`.
+fn guarded(mut res: Response) -> Response {
+    let h = res.headers_mut();
+    h.entry(header::X_CONTENT_TYPE_OPTIONS)
+        .or_insert(header::HeaderValue::from_static("nosniff"));
+    h.entry(header::REFERRER_POLICY)
+        .or_insert(header::HeaderValue::from_static("no-referrer"));
+    res
+}
+
+/// The text of the console's own script: the one `<script>` without a `src`.
+fn console_script(html: &str) -> &str {
+    let start = html.find("<script>").map_or(0, |at| at + "<script>".len());
+    let end = html[start..]
+        .find("</script>")
+        .map_or(html.len(), |at| start + at);
+    &html[start..end]
+}
+
+/// What the console page may load and run. Its script is allowed by a
+/// digest of its text, so nothing else runs as script on the page: not an
+/// inline handler, not a script element, whatever a value on the page says.
+static CONSOLE_CSP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    use base64::Engine as _;
+    let digest = sha2::Sha256::digest(console_script(VERSIONED_CONSOLE.as_str()).as_bytes());
+    let digest = base64::engine::general_purpose::STANDARD.encode(digest);
+    format!(
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-{digest}'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+    )
+});
 
 /// The console with each asset's URL carrying a hash of its content
 /// (`favicon.svg?v=1a2b3c4d`), so a changed logo or font is fetched again
@@ -260,10 +292,7 @@ fn page(html: &'static str) -> Response {
             (header::CACHE_CONTROL, "no-store"),
             (header::X_FRAME_OPTIONS, "DENY"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            (
-                header::CONTENT_SECURITY_POLICY,
-                "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'",
-            ),
+            (header::CONTENT_SECURITY_POLICY, CONSOLE_CSP.as_str()),
         ],
         Html(html),
     )
@@ -1024,6 +1053,10 @@ async fn discard_draft(State(a): State<Admin>, headers: HeaderMap) -> Response {
 
 /// Runs the alert checks, with the AI explaining new alerts when it is on.
 pub async fn run_alert_check(a: &Admin) -> Value {
+    // The checks run every few minutes whether or not anyone saves: the
+    // time to take the secrets out of kept files that have had their month.
+    let history = a.history.clone();
+    let _ = tokio::task::spawn_blocking(move || history.expire_secrets()).await;
     type Explain =
         dyn Fn(Alert) -> futures_util::future::BoxFuture<'static, Option<Value>> + Send + Sync;
     let explain: Option<Box<Explain>> = a.ai.clone().map(|ai| {
@@ -1343,6 +1376,10 @@ async fn live_start(State(a): State<Admin>, headers: HeaderMap, body: Bytes) -> 
         &json!({ "code": code, "since": now, "preview": b.preview, "send": b.send }),
     ) {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &e);
+    }
+    // The browser's first hit should find it at once on this instance.
+    if let Some(d) = &a.drafts {
+        d.forget_sessions();
     }
     ok(json!({ "code": code, "since": now, "preview": b.preview, "send": b.send }))
 }
@@ -1697,6 +1734,11 @@ async fn undo(
             "no such change, or it can't be undone",
         );
     };
+    // A file whose secrets are no longer kept gets the ones live has now.
+    let text = match editable(&a).and_then(|f| f.text().ok()) {
+        Some((live, _)) => history::with_current_secrets(&text, &live),
+        None => text,
+    };
     let first = json!({ "kind": "undo", "of": id });
     change(
         &a,
@@ -1949,7 +1991,7 @@ pub(crate) fn secret_name(name: &str) -> bool {
         || n.ends_with("key")
 }
 
-fn redact(v: &Value) -> Value {
+pub(crate) fn redact(v: &Value) -> Value {
     match v {
         Value::Object(m) => Value::Object(
             m.iter()
@@ -2358,8 +2400,39 @@ mod tests {
             assert_eq!(gone.status(), 404);
 
             let page = http.get(format!("{base}/admin")).send().await.unwrap();
-            let csp = page.headers()["content-security-policy"].to_str().unwrap();
+            let csp = page.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .to_string();
             assert!(csp.contains("font-src 'self'"), "{csp}");
+            assert_eq!(page.headers()["referrer-policy"], "no-referrer");
+            assert_eq!(page.headers()["x-content-type-options"], "nosniff");
+            // Only the console's own script runs: it is named by the digest
+            // of the text the page is served with, and nothing inline is
+            // allowed besides.
+            let html = page.text().await.unwrap();
+            assert_eq!(html.matches("<script").count(), 1);
+            let script = console_script(&html);
+            assert!(script.len() > 100_000 && !script.contains("</script>"));
+            let digest = {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD
+                    .encode(sha2::Sha256::digest(script.as_bytes()))
+            };
+            let scripts = csp
+                .split(';')
+                .map(str::trim)
+                .find(|d| d.starts_with("script-src"))
+                .unwrap();
+            assert_eq!(scripts, format!("script-src 'sha256-{digest}'"));
+            // The API's answers, refusals included, carry the same two.
+            for token in [TOKEN, "wrong"] {
+                let r = call(reqwest::Method::GET, "/admin/api/overview", token)
+                    .await
+                    .unwrap();
+                assert_eq!(r.headers()["x-content-type-options"], "nosniff");
+                assert_eq!(r.headers()["referrer-policy"], "no-referrer");
+            }
             let font = http
                 .get(format!("{base}/admin/assets/google-sans-text.woff2"))
                 .send()
