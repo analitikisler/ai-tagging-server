@@ -129,13 +129,7 @@ const googleEmail = (v) => {
   }
   return sha256Sync(s, { outputEncoding: 'hex' });
 };
-const googlePhone = (v) => {
-  if (v === undefined || v === null || v === '') return undefined;
-  const s = makeString(v).trim();
-  if (isHash(s.toLowerCase())) return s.toLowerCase();
-  const d = s.replace(/[^0-9]/g, '');
-  return d ? sha256Sync('+' + d, { outputEncoding: 'hex' }) : undefined;
-};
+const googlePhone = hashPhoneE164;
 
 // An access token from the refresh token, kept until a minute before it ends.
 const withToken = (then, fail) => {

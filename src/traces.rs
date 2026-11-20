@@ -492,7 +492,7 @@ impl Tally {
 }
 
 /// Headers that carry the visitor's IP address.
-const IP_HEADERS: &[&str] = &[
+pub(crate) const IP_HEADERS: &[&str] = &[
     "x-forwarded-for",
     "x-real-ip",
     "x-sst-client-ip",
@@ -618,7 +618,7 @@ pub fn for_ai(record: &Record) -> Value {
 
 /// Removes `names` from a query string (or a form body line), keeping the
 /// other parameters exactly as they were.
-fn drop_params(query: &str, names: &[&str]) -> String {
+pub(crate) fn drop_params(query: &str, names: &[&str]) -> String {
     query
         .split('&')
         .filter(|p| {

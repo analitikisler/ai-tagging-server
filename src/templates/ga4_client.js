@@ -5,8 +5,10 @@
 //   extendGaCookie  Re-set the _ga cookie (and the property's _ga_<id> session
 //                   cookie) from the server with a two-year lifetime, so
 //                   browsers that cap script-set cookies (Safari) keep the same
-//                   client id. On unless set to false. Skipped when the hit says
-//                   analytics_storage is denied (Consent Mode gcs=G1x0).
+//                   client id. On unless set to false. Done only when the hit
+//                   says analytics_storage is granted (Consent Mode gcd, or
+//                   gcs when gcd doesn't say); a hit with no consent signal
+//                   leaves the cookie alone, like the ad cookies below.
 //   keepAdCookies   Re-set Meta's _fbp and _fbc and TikTok's _ttp cookies
 //                   from the server with a 390-day lifetime (Safari caps
 //                   script-set ones at 7 days), and create _fbc from ?fbclid
@@ -45,6 +47,20 @@
 //                   hit says ad_storage is granted (Consent Mode gcd, or gcs
 //                   when gcd is missing); a hit with no consent signal leaves
 //                   them alone.
+//   cookiesWithoutConsent
+//                   true is for a site that doesn't use Consent Mode: a
+//                   signal the hit doesn't carry counts as granted, so its
+//                   cookies are kept. A signal that says denied still stops
+//                   them. Off unless set.
+//   stripUrlParams  true trims each event's page_location and page_referrer
+//                   to the parameters attribution needs: utm_*, the ad
+//                   platforms' click ids, the clickIdAliases names and the
+//                   names in keepUrlParams. Whatever else a site puts in a
+//                   query string (a search, an e-mail, a reset token) then
+//                   reaches no tag, vendor or export, and a fragment that
+//                   holds parameters (#access_token=…) is dropped too. Off
+//                   unless set.
+//   keepUrlParams   More parameter names stripUrlParams keeps, e.g. ['page'].
 //   clickIdAliases  Click ids to restore from another parameter name, e.g.
 //                   { "gclid": "gc_id" }: a page_location with ?gc_id=… and no
 //                   gclid gets gclid=… added. Safari and Brave strip known
@@ -169,17 +185,26 @@ if (!flagBots && bot.score >= 100) {
 }
 
 const gcs = getRequestQueryParameter('gcs') || '';
-const analyticsDenied = gcs.length === 4 && gcs.charAt(3) === '0';
-// Consent Mode v2: gcd's first letter is ad_storage (t/n/r/v granted,
-// p/q/m/u denied); gcs ("G1" + ad storage + analytics storage) is the
-// fallback. A hit with no consent signal leaves ad cookies alone.
-const adStorageGranted = () => {
-  const c = (getRequestQueryParameter('gcd') || '').replace(/[^a-z]/g, '').charAt(0);
-  if (c && 'tnrv'.indexOf(c) >= 0) return true;
-  if (c && 'pqmu'.indexOf(c) >= 0) return false;
-  return /^G11[01]/.test(gcs);
+const gcdLetters = (getRequestQueryParameter('gcd') || '').replace(/[^a-z]/g, '');
+// Consent Mode v2: gcd carries a letter per signal, ad_storage first and
+// analytics_storage second (t/n/r/v granted, p/q/m/u denied); gcs ("G1" +
+// ad storage + analytics storage) is the fallback. Each is 'granted',
+// 'denied' or undefined when the hit doesn't say.
+const consentFor = (at) => {
+  const c = gcdLetters.charAt(at);
+  if (c && 'tnrv'.indexOf(c) >= 0) return 'granted';
+  if (c && 'pqmu'.indexOf(c) >= 0) return 'denied';
+  if (/^G1[01][01]/.test(gcs)) return gcs.charAt(2 + at) === '1' ? 'granted' : 'denied';
+  return undefined;
 };
-const adsGranted = adStorageGranted();
+// A cookie is kept on a granted signal. One the hit doesn't carry leaves
+// the cookie alone, unless the site doesn't use Consent Mode at all
+// (cookiesWithoutConsent).
+const mayKeep = (state) => state === 'granted' || (state === undefined && data.cookiesWithoutConsent === true);
+const analyticsState = consentFor(1);
+const analyticsDenied = analyticsState === 'denied';
+const analyticsGranted = mayKeep(analyticsState);
+const adsGranted = mayKeep(consentFor(0));
 const DAY = 86400;
 // Re-sets a cookie from the server, with `value` or the one the browser sent.
 const keep = (name, days, value) => {
@@ -219,7 +244,7 @@ const keepFbc = (days) => {
   }
 };
 const keepCookies = data.keepCookies || [];
-if ((data.extendGaCookie !== false || keepCookies.indexOf('google_analytics') >= 0) && !analyticsDenied) {
+if ((data.extendGaCookie !== false || keepCookies.indexOf('google_analytics') >= 0) && analyticsGranted) {
   keep('_ga', 730);
   if (tid.indexOf('G-') === 0) keep('_ga_' + tid.substring(2), 730);
 }
@@ -273,6 +298,36 @@ const decode = (v) => {
   } catch (e) {
     return v;
   }
+};
+
+// What a page address keeps with stripUrlParams: campaign parameters and
+// the click ids the ad platforms' tags read.
+const KEPT_PARAMS = [
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id',
+  'utm_source_platform', 'utm_creative_format', 'utm_marketing_tactic',
+  'gclid', 'gbraid', 'wbraid', 'dclid', 'gclsrc', 'gad_source', 'gad_campaignid', 'srsltid',
+  'fbclid', 'ttclid', 'msclkid', 'li_fat_id', 'twclid', 'ScCid', 'sccid', 'epik', 'rdt_cid',
+];
+const keptParams = {};
+KEPT_PARAMS.concat(data.keepUrlParams || []).forEach((n) => {
+  keptParams[n] = true;
+});
+for (const real in aliases) {
+  keptParams[real] = true;
+  keptParams[aliases[real]] = true;
+}
+const stripParams = (url) => {
+  if (typeof url !== 'string' || !url) return url;
+  const hashAt = url.indexOf('#');
+  const base = hashAt < 0 ? url : url.substring(0, hashAt);
+  // A fragment that is a route (#/cart) stays; one that holds parameters
+  // (#access_token=…) goes.
+  let fragment = hashAt < 0 ? '' : url.substring(hashAt);
+  if (fragment.indexOf('=') >= 0) fragment = '';
+  const queryAt = base.indexOf('?');
+  if (queryAt < 0) return base + fragment;
+  const kept = base.substring(queryAt + 1).split('&').filter((p) => keptParams[decode(p.split('=')[0])] === true);
+  return base.substring(0, queryAt) + (kept.length ? '?' + kept.join('&') : '') + fragment;
 };
 
 // What the request tells about the visitor, for data.visitorInfo.
@@ -373,6 +428,10 @@ const events = own.filter((event) => {
 for (const why in rejected) logToConsole('events_rejected=' + rejected[why] + ' reason=' + why);
 events.forEach((event) => {
   event.page_location = restoreClickIds(event.page_location);
+  if (data.stripUrlParams === true) {
+    event.page_location = stripParams(event.page_location);
+    event.page_referrer = stripParams(event.page_referrer);
+  }
   if (data.visitorInfo === true) {
     for (const k in geo) if (geo[k]) event[k] = geo[k];
     event['x-sst-device'] = device;

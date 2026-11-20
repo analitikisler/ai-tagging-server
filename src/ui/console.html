@@ -1053,6 +1053,7 @@ const STRINGS = {
     'pin.labelHelp': 'What this hit is, e.g. “Purchase with coupon”.',
     'pin.done': 'Pinned as a test hit.',
     'pin.remove': 'Remove',
+    'pin.until': 'kept until {date}',
     'al.title': 'Alerts',
     'al.lead': 'Each check compares the last hour with the same hour on the 7 days before: key events that drop or stop, vendors refusing sends, failing tags, missing values, unclaimed hits and renamed events.',
     'al.open': 'Open alerts',
@@ -1173,7 +1174,7 @@ const STRINGS = {
     'ft.go.sites': 'Open Sites',
     'ft.cookies.name': 'Cookie keeper',
     'ft.cookies.line': 'Re-sets ad and analytics cookies from your server, so Safari doesn’t expire them after 7 days.',
-    'ft.cookies.how': 'On each hit, the server re-sets the cookies of the platforms you pick, from your own domain and with each platform’s own lifetime. Google Analytics, Meta and TikTok are kept by default, and Meta’s _fbc is made from ?fbclid on the landing page. Ad cookies are only re-set when the hit says ad storage is granted.',
+    'ft.cookies.how': 'On each hit, the server re-sets the cookies of the platforms you pick, from your own domain and with each platform’s own lifetime. Google Analytics, Meta and TikTok are kept by default, and Meta’s _fbc is made from ?fbclid on the landing page. A cookie is only re-set when the hit says its storage is granted: analytics storage for Google Analytics, ad storage for the others.',
     'ft.cookies.env': 'KEEP_COOKIES=google_ads,meta',
     'ft.cookies.n': '{n} platforms',
     'ft.cookies.defaults': 'Google Analytics, Meta and TikTok cookies are kept by default. Pick the other platforms to keep too.',
@@ -1215,6 +1216,20 @@ const STRINGS = {
     'ft.bots.dropped': 'Dropped',
     'ft.bots.switch': 'Forward bots with a score',
     'ft.bots.switch.help': 'Off: bot hits are dropped.',
+    'ft.urlparams.name': 'Trim page addresses',
+    'ft.urlparams.line': 'Keeps only campaign and click ID parameters in page addresses; anything else in a query string reaches no tag.',
+    'ft.urlparams.how': 'A page address can carry a search, an e-mail or a reset token in its query string, and tags pass the address on to every platform. With this on, page_location and page_referrer keep utm_… parameters, the ad platforms’ click IDs, your click ID aliases and the names you list; the rest is removed before any tag runs, and a fragment that holds parameters is dropped too.',
+    'ft.urlparams.env': 'STRIP_URL_PARAMS=1, KEEP_URL_PARAMS=page,q',
+    'ft.urlparams.switch': 'Keep only campaign and click ID parameters',
+    'ft.urlparams.switch.help': 'Off: page addresses go to the tags as the site sent them.',
+    'ft.urlparams.keep': 'Other parameters to keep',
+    'ft.urlparams.keep.help': 'One name per line, for parameters your reports need.',
+    'ft.nosignal.name': 'Cookies without Consent Mode',
+    'ft.nosignal.line': 'For a site that doesn’t use Consent Mode: keeps cookies for hits that carry no consent signal.',
+    'ft.nosignal.how': 'Cookies are re-set from the server only when the hit says the visitor granted them (Consent Mode). A hit with no signal leaves them alone, so on a site without Consent Mode nothing is kept. Turn this on only if the site collects consent another way, or needs none: a signal the hit doesn’t carry then counts as granted. A signal that says denied still stops the cookie.',
+    'ft.nosignal.env': 'COOKIES_WITHOUT_CONSENT=1',
+    'ft.nosignal.switch': 'Keep cookies when a hit has no consent signal',
+    'ft.nosignal.switch.help': 'Off: only hits that say “granted” have their cookies kept.',
     'ft.strip.name': 'Strip user data from GA4',
     'ft.strip.line': 'Drops plain e-mail, phone and address from what GA4 receives; hashed values stay.',
     'ft.strip.how': 'A setting of the GA4 tag, on unless turned off: in the tag’s settings, in a site’s settings, or with STRIP_USER_DATA=0 for the built-in container.',
@@ -1692,6 +1707,8 @@ const STRINGS = {
     'enr.signed': 'Only look up IDs your site has signed',
     'enr.signed.help': 'Without this, anyone who sends a hit picks whose details are looked up. Your site sends user_id_sig (or client_id_sig) with the event: the HMAC-SHA256 of the ID with the key below, as hex.',
     'enr.signingKey': 'Signing key (16 characters or more)',
+    'enr.phoneCode': 'Country code for phone numbers without one (optional)',
+    'enr.phoneCode.help': 'Digits only, such as 90 or 49. A number that comes as 0555 111 22 33 is then matched as 90 555 111 22 33; without it, such a number matches nothing.',
     'enr.use': 'Use enrichment',
     'enr.save': 'Save enrichment',
     'enr.saved': 'Enrichment saved',
@@ -1945,6 +1962,7 @@ const STRINGS = {
     'pin.labelHelp': 'Bu hit’in ne olduğu, örn. “Kuponlu satın alma”.',
     'pin.done': 'Test hit’i olarak sabitlendi.',
     'pin.remove': 'Kaldır',
+    'pin.until': '{date} tarihine kadar saklanır',
     'al.title': 'Uyarılar',
     'al.lead': 'Her kontrol son bir saati önceki 7 günün aynı saatiyle karşılaştırır: düşen veya duran önemli event’ler, gönderimi reddeden platformlar, başarısız tag’ler, eksik değerler, sahipsiz hit’ler ve adı değişen event’ler.',
     'al.open': 'Açık uyarılar',
@@ -2065,7 +2083,7 @@ const STRINGS = {
     'ft.go.sites': 'Siteleri aç',
     'ft.cookies.name': 'Cookie koruyucu',
     'ft.cookies.line': 'Reklam ve analitik cookie’lerini sunucunuzdan yeniden yazar; Safari onları 7 gün sonra silmez.',
-    'ft.cookies.how': 'Her hit’te sunucu, seçtiğiniz platformların cookie’lerini kendi alan adınızdan ve her platformun kendi süresiyle yeniden yazar. Google Analytics, Meta ve TikTok varsayılan olarak korunur; Meta’nın _fbc’si giriş sayfasındaki ?fbclid’den oluşturulur. Reklam cookie’leri yalnızca hit reklam depolamasına izin verildiğini söylediğinde yeniden yazılır.',
+    'ft.cookies.how': 'Her hit’te sunucu, seçtiğiniz platformların cookie’lerini kendi alan adınızdan ve her platformun kendi süresiyle yeniden yazar. Google Analytics, Meta ve TikTok varsayılan olarak korunur; Meta’nın _fbc’si giriş sayfasındaki ?fbclid’den oluşturulur. Bir cookie yalnızca hit, onun depolamasına izin verildiğini söylediğinde yeniden yazılır: Google Analytics için analitik depolama, diğerleri için reklam depolama.',
     'ft.cookies.env': 'KEEP_COOKIES=google_ads,meta',
     'ft.cookies.n': '{n} platform',
     'ft.cookies.defaults': 'Google Analytics, Meta ve TikTok cookie’leri varsayılan olarak korunur. Korunacak diğer platformları seçin.',
@@ -2107,6 +2125,20 @@ const STRINGS = {
     'ft.bots.dropped': 'Atılıyor',
     'ft.bots.switch': 'Botları puanla ilet',
     'ft.bots.switch.help': 'Kapalı: bot hit’leri atılır.',
+    'ft.urlparams.name': 'Sayfa adreslerini kırp',
+    'ft.urlparams.line': 'Sayfa adreslerinde yalnızca kampanya ve tıklama ID parametrelerini bırakır; sorgu dizesindeki diğer her şey hiçbir tag’e ulaşmaz.',
+    'ft.urlparams.how': 'Bir sayfa adresi sorgu dizesinde bir arama, bir e-posta ya da bir sıfırlama token’ı taşıyabilir ve tag’ler adresi her platforma iletir. Bu açıkken page_location ve page_referrer içinde utm_… parametreleri, reklam platformlarının tıklama ID’leri, tıklama ID takma adlarınız ve listelediğiniz adlar kalır; geri kalanı herhangi bir tag çalışmadan önce çıkarılır, parametre taşıyan bir fragment de atılır.',
+    'ft.urlparams.env': 'STRIP_URL_PARAMS=1, KEEP_URL_PARAMS=page,q',
+    'ft.urlparams.switch': 'Yalnızca kampanya ve tıklama ID parametrelerini bırak',
+    'ft.urlparams.switch.help': 'Kapalı: sayfa adresleri tag’lere sitenin gönderdiği gibi gider.',
+    'ft.urlparams.keep': 'Korunacak diğer parametreler',
+    'ft.urlparams.keep.help': 'Her satıra bir ad; raporlarınızın ihtiyaç duyduğu parametreler için.',
+    'ft.nosignal.name': 'Consent Mode olmadan cookie’ler',
+    'ft.nosignal.line': 'Consent Mode kullanmayan siteler için: izin sinyali taşımayan hit’lerin cookie’lerini korur.',
+    'ft.nosignal.how': 'Cookie’ler yalnızca hit, ziyaretçinin izin verdiğini söylediğinde (Consent Mode) sunucudan yeniden yazılır. Sinyal taşımayan bir hit cookie’lere dokunmaz; yani Consent Mode kullanmayan bir sitede hiçbir cookie korunmaz. Bunu yalnızca site izni başka bir yolla topluyorsa ya da izne ihtiyaç duymuyorsa açın: hit’in taşımadığı bir sinyal o zaman verilmiş sayılır. Reddedildiğini söyleyen bir sinyal cookie’yi yine durdurur.',
+    'ft.nosignal.env': 'COOKIES_WITHOUT_CONSENT=1',
+    'ft.nosignal.switch': 'Hit izin sinyali taşımadığında cookie’leri koru',
+    'ft.nosignal.switch.help': 'Kapalı: yalnızca “verildi” diyen hit’lerin cookie’leri korunur.',
     'ft.strip.name': 'GA4’ten kullanıcı verisini çıkar',
     'ft.strip.line': 'GA4’e gidenlerden düz e-posta, telefon ve adresi çıkarır; hash’lenmiş değerler kalır.',
     'ft.strip.how': 'GA4 tag’inin bir ayarıdır ve kapatılmadıkça açıktır: tag’in ayarlarından, sitenin ayarlarından ya da yerleşik container için STRIP_USER_DATA=0 ile kapatılır.',
@@ -2580,6 +2612,8 @@ const STRINGS = {
     'enr.signed': 'Yalnızca sitenizin imzaladığı ID’leri sorgula',
     'enr.signed.help': 'Bu kapalıyken, hit gönderen herkes kimin bilgilerinin sorgulanacağını seçebilir. Siteniz event ile birlikte user_id_sig (ya da client_id_sig) gönderir: ID’nin aşağıdaki anahtarla hesaplanan HMAC-SHA256 değeri, hex olarak.',
     'enr.signingKey': 'İmzalama anahtarı (en az 16 karakter)',
+    'enr.phoneCode': 'Ülke kodu olmayan telefon numaraları için ülke kodu (isteğe bağlı)',
+    'enr.phoneCode.help': 'Yalnızca rakam, örn. 90 ya da 49. 0555 111 22 33 olarak gelen numara 90 555 111 22 33 olarak eşleştirilir; kod girilmezse böyle bir numara hiçbir şeyle eşleşmez.',
     'enr.use': 'Zenginleştirmeyi kullan',
     'enr.save': 'Zenginleştirmeyi kaydet',
     'enr.saved': 'Zenginleştirme kaydedildi',
@@ -5701,7 +5735,7 @@ VIEWS.history = {
     const pins = h('ul', { class: 'ai-list' });
     for (const p of HI.pinned || []) {
       pins.appendChild(h('li', null, h('span', { class: 'stack gap-1' }, h('span', { class: 'strong', text: p.label }),
-        h('span', { class: 'meta', text: (p.events || []).join(', ') + ' · ' + stamp(p.at) + (p.tenant ? ' · ' + p.tenant : '') }),
+        h('span', { class: 'meta', text: (p.events || []).join(', ') + ' · ' + stamp(p.at) + (p.tenant ? ' · ' + p.tenant : '') + (p.expires_at ? ' · ' + t('pin.until', { date: dateShort(p.expires_at) }) : '') }),
         h('span', { class: 'cluster' }, tfButton(t('pin.remove'), 'ghost', async () => {
           try { const r = await api('DELETE', '/admin/api/pinned/' + encodeURIComponent(p.id)); HI.pinned = r.pinned || []; this.render(); } catch (e) { toast('bad', e.raw || e.message); }
         }, 'i-trash')))));
@@ -7079,10 +7113,11 @@ function ga4Client(c) { return c ? (c.clients || []).find((x) => x.template === 
 function clientFeatures(c, tenant) {
   if (S.mode === 'multi') {
     const tt = (S.tenants || []).find((x) => x.id === tenant);
-    return Object.assign({ keep_cookies: [], click_id_aliases: {}, visitor_info: false, bot_handling: '' }, tt && tt.features);
+    return Object.assign({ keep_cookies: [], click_id_aliases: {}, visitor_info: false, bot_handling: '', strip_url_params: false, keep_url_params: [], cookies_without_consent: false }, tt && tt.features);
   }
   const d = (ga4Client(c) || {}).data || {};
-  return { keep_cookies: d.keepCookies || [], click_id_aliases: d.clickIdAliases || {}, visitor_info: d.visitorInfo === true, bot_handling: d.botHandling || '' };
+  return { keep_cookies: d.keepCookies || [], click_id_aliases: d.clickIdAliases || {}, visitor_info: d.visitorInfo === true, bot_handling: d.botHandling || '',
+    strip_url_params: d.stripUrlParams === true, keep_url_params: d.keepUrlParams || [], cookies_without_consent: d.cookiesWithoutConsent === true };
 }
 function featureList(c, tenant) {
   const f = clientFeatures(c, tenant);
@@ -7104,11 +7139,13 @@ function featureList(c, tenant) {
   return [
     { group: 'ft.g.recover', key: 'cookies', edit: 'client', state: on(t('ft.cookies.n', { n: others.length + adDefaults.length + (gaKept ? 1 : 0) })) },
     { group: 'ft.g.recover', key: 'clickids', edit: 'client', state: aliases.length ? on(aliases.join(', ')) : off() },
+    { group: 'ft.g.recover', key: 'nosignal', edit: 'client', state: f.cookies_without_consent ? on() : off() },
     { group: 'ft.g.recover', key: 'scripts', go: S.mode === 'multi' ? 'sites' : null, state: scripts ? on(((scripts.data || {}).allowedIds || []).join(', ')) : off() },
     { group: 'ft.g.visitors', key: 'visitor', edit: 'client', state: f.visitor_info ? on() : off() },
     { group: 'ft.g.visitors', key: 'ai', edit: 'client', state: f.visitor_info ? on() : off() },
     { group: 'ft.g.visitors', key: 'bots', edit: 'client', state: f.bot_handling === 'flag' ? on(t('ft.bots.flagged')) : off(t('ft.bots.dropped')) },
     { group: 'ft.g.privacy', key: 'strip', go: S.mode === 'multi' ? 'sites' : 'container', state: gaTag && (gaTag.data || {}).stripUserData !== false ? on() : off() },
+    { group: 'ft.g.privacy', key: 'urlparams', edit: 'client', state: f.strip_url_params ? on() : off() },
     { group: 'ft.g.privacy', key: 'origin', go: S.mode === 'multi' ? 'sites' : null, state: d.originCheck === 'off' ? off() : d.originCheck === 'log' ? on(t('ft.origin.log')) : on(t('ft.origin.enforce')) },
     { group: 'ft.g.platforms', key: 'platforms', go: aiOn() ? 'setup' : 'container', state: ads.length ? on(ads.map((x) => x.name).join(', ')) : off() },
     { group: 'ft.g.platforms', key: 'transform', go: 'transformations', state: rules.length ? on(t('ft.transform.n', { n: rules.length })) : off() },
@@ -7255,6 +7292,19 @@ VIEWS.features = {
       const row = switchRow('ft-vi', t('ft.visitor.switch'), t('ft.visitor.switch.help'), f.visitor_info);
       el.appendChild(row.el);
       return { el, read: () => { const r = next(); r.visitor_info = row.sw.getAttribute('aria-checked') === 'true'; return r; } };
+    }
+    if (key === 'nosignal') {
+      const row = switchRow('ft-ns', t('ft.nosignal.switch'), t('ft.nosignal.switch.help'), f.cookies_without_consent);
+      el.appendChild(row.el);
+      return { el, read: () => { const r = next(); r.cookies_without_consent = row.sw.getAttribute('aria-checked') === 'true'; return r; } };
+    }
+    if (key === 'urlparams') {
+      const row = switchRow('ft-up', t('ft.urlparams.switch'), t('ft.urlparams.switch.help'), f.strip_url_params);
+      const ta = h('textarea', { class: 'textarea', id: 'ft-keep', 'data-mono': true, rows: 3, placeholder: 'page\nq' });
+      ta.value = (f.keep_url_params || []).join('\n');
+      el.appendChild(row.el);
+      el.appendChild(h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'ft-keep', text: t('ft.urlparams.keep') }), h('span', { class: 'note', text: t('ft.urlparams.keep.help') }), ta));
+      return { el, read: () => { const r = next(); r.strip_url_params = row.sw.getAttribute('aria-checked') === 'true'; r.keep_url_params = lines(ta.value); return r; } };
     }
     const row = switchRow('ft-bots', t('ft.bots.switch'), t('ft.bots.switch.help'), f.bot_handling === 'flag');
     el.appendChild(row.el);
@@ -7416,12 +7466,14 @@ VIEWS.integrations = {
     const en = switchRow('enr-enabled', t('enr.use'), null, e.enabled);
     const eud = switchRow('enr-eud', t('enr.eventUserData'), t('enr.eventUserData.help'), !!e.event_user_data);
     const signed = switchRow('enr-signed', t('enr.signed'), t('enr.signed.help'), !!e.require_signature);
+    const pc = h('input', { class: 'input', 'data-mono': true, id: 'enr-pc', type: 'text', inputmode: 'numeric', autocomplete: 'off', value: e.phone_country_code || '', placeholder: '90', 'aria-describedby': 'enr-pc-h' });
     const sk = h('input', { class: 'input', 'data-mono': true, id: 'enr-sk', type: 'password', autocomplete: 'off', placeholder: e.signing_key_set ? t('int.secretKept') : null, 'aria-describedby': e.signing_key_set ? 'enr-sk-h' : null });
     const msg = h('p', { class: 'message', 'aria-live': 'polite' });
     const save = h('button', { class: 'button', 'data-variant': 'primary', type: 'submit' }, t('enr.save'));
     const form = h('form', { class: 'panel', id: 'int-enrichment', novalidate: true, 'aria-label': t('enr.title') },
       h('div', { class: 'panel__head' }, h('h3', { class: 'panel__title', text: t('enr.title') }), e.enabled || e.event_user_data ? status('ok', t('int.on')) : status('muted', t('int.off'))),
       h('div', { class: 'panel__body stack' }, h('p', { class: 'note', text: t('enr.lead') }), eud.el,
+        h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'enr-pc', text: t('enr.phoneCode') }), pc, h('span', { class: 'field__hint', id: 'enr-pc-h', text: t('enr.phoneCode.help') })),
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'enr-url', text: t('enr.url') }), url, h('span', { class: 'field__hint', id: 'enr-url-h' }, t('enr.url.help'), ' ', code(t('enr.url.example')))),
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'enr-key', text: t('enr.key') }), key),
         h('div', { class: 'field' }, h('label', { class: 'field__label', for: 'enr-hn', text: t('enr.headerName') }), hn),
@@ -7434,7 +7486,7 @@ VIEWS.integrations = {
       clear(msg);
       save.disabled = true; save.setAttribute('aria-busy', 'true');
       try {
-        S.integrations = await api('PUT', '/admin/api/enrichment', { enabled: en.sw.getAttribute('aria-checked') === 'true', url: url.value.trim(), key: key.value, header_name: hn.value.trim(), header_value: hv.value.trim(), event_user_data: eud.sw.getAttribute('aria-checked') === 'true', require_signature: signed.sw.getAttribute('aria-checked') === 'true', signing_key: sk.value.trim() });
+        S.integrations = await api('PUT', '/admin/api/enrichment', { enabled: en.sw.getAttribute('aria-checked') === 'true', url: url.value.trim(), key: key.value, header_name: hn.value.trim(), header_value: hv.value.trim(), event_user_data: eud.sw.getAttribute('aria-checked') === 'true', require_signature: signed.sw.getAttribute('aria-checked') === 'true', signing_key: sk.value.trim(), phone_country_code: pc.value.trim() });
         S.containers.clear();
         toast('ok', t('enr.saved'));
         this.render();

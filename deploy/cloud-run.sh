@@ -25,6 +25,13 @@
 # then turned on at /admin. BIGQUERY_LOCATION sets where a new dataset lives
 # (REGION by default).
 #
+# Cloud Run writes a request log line for every hit, with its whole address:
+# client ids, page addresses and whatever else the hit carries in its query,
+# kept for 30 days. The script leaves those lines out of the project's
+# _Default log bucket for this service (REQUEST_LOGS=drop, the default); the
+# server's own log line per hit, which has no query, stays. REQUEST_LOGS=keep
+# leaves Cloud Logging as it is.
+#
 # Or TENANTS_BUCKET=my-bucket-name hosts several sites from one service: the
 # admin page then edits the tenants file (a container per hostname) kept in
 # that bucket. SCRIPT_IDS, MEASUREMENT_IDS, SITE_DOMAINS and ORIGIN_CHECK are
@@ -47,6 +54,9 @@ SITE_DOMAINS="${SITE_DOMAINS:-}"
 # 403, the default), log (forwarded, logged as origin_check=would_reject) or
 # off.
 ORIGIN_CHECK="${ORIGIN_CHECK:-enforce}"
+# What happens to Cloud Run's own request log lines for this service: drop
+# (left out of the _Default log bucket) or keep.
+REQUEST_LOGS="${REQUEST_LOGS:-drop}"
 INTEGRATIONS_BUCKET="${INTEGRATIONS_BUCKET:-}"
 TENANTS_BUCKET="${TENANTS_BUCKET:-}"
 BIGQUERY_TABLE="${BIGQUERY_TABLE:-}"
@@ -80,6 +90,10 @@ fi
 case "$ORIGIN_CHECK" in
   enforce | log | off) ;;
   *) echo "ORIGIN_CHECK must be enforce, log or off" >&2; exit 1 ;;
+esac
+case "$REQUEST_LOGS" in
+  drop | keep) ;;
+  *) echo "REQUEST_LOGS must be drop or keep" >&2; exit 1 ;;
 esac
 
 cd "$(dirname "$0")/.."
@@ -179,6 +193,27 @@ gcloud run deploy "$SERVICE" \
   --set-env-vars "^@^${ENV_VARS}" \
   --set-secrets "$SECRET_ARGS" \
   ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
+
+# Cloud Run's request log lines carry each hit's whole address. Leaving them
+# out of the log bucket is a setting of the project's _Default sink, named
+# after the service so another service's lines are not touched. A project
+# that can't be changed this way still gets its deploy: the step only warns.
+if [ "$REQUEST_LOGS" = drop ]; then
+  EXCLUSION="${SERVICE}-requests"
+  FILTER="resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${SERVICE}\" AND logName:\"run.googleapis.com%2Frequests\""
+  if gcloud logging sinks describe _Default --project "$PROJECT_ID" --format 'value(exclusions.name)' 2>/dev/null \
+       | tr ';' '\n' | grep -qx "$EXCLUSION"; then
+    HOW=--update-exclusion
+  else
+    HOW=--add-exclusion
+  fi
+  if gcloud logging sinks update _Default --project "$PROJECT_ID" \
+       "${HOW}=name=${EXCLUSION},filter=${FILTER}" >/dev/null; then
+    echo "Request logs: Cloud Run's request lines for $SERVICE are left out of Cloud Logging (REQUEST_LOGS=keep keeps them)"
+  else
+    echo "warning: could not leave $SERVICE's request lines out of Cloud Logging; they hold each hit's whole address" >&2
+  fi
+fi
 
 URL="$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT_ID" --format 'value(status.url)')"
 echo

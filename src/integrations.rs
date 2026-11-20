@@ -503,6 +503,11 @@ pub struct Enrichment {
     /// off, so turning them on again needs no new key.
     #[serde(default)]
     pub signing_key: String,
+    /// The calling code of the country the site's customers are in, digits
+    /// only ("90", "49"): put in front of a phone number that comes without
+    /// one, so it can be matched. Empty leaves such numbers as they are.
+    #[serde(default)]
+    pub phone_country_code: String,
 }
 
 /// Fewest characters of a signing key.
@@ -523,6 +528,7 @@ impl Default for Enrichment {
             event_user_data: false,
             require_signature: false,
             signing_key: String::new(),
+            phone_country_code: String::new(),
         }
     }
 }
@@ -654,6 +660,20 @@ impl Config {
         if e.require_signature && e.signing_key.is_empty() {
             return Err("enrichment: checking signatures needs a signing key".into());
         }
+        // "+90" and "0090" are the same code as "90".
+        e.phone_country_code = e
+            .phone_country_code
+            .trim()
+            .trim_start_matches('+')
+            .trim_start_matches('0')
+            .to_string();
+        if e.phone_country_code.len() > 4
+            || !e.phone_country_code.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Err(
+                "enrichment: the phone country code is 1 to 4 digits, such as 90 or 49".into(),
+            );
+        }
         Ok(())
     }
 
@@ -706,6 +726,9 @@ impl Config {
         }
         if e.event_user_data {
             data.insert("eventUserData".into(), Value::Bool(true));
+        }
+        if !e.phone_country_code.is_empty() {
+            data.insert("phoneCountryCode".into(), json!(e.phone_country_code));
         }
         Tag {
             name: def.name.into(),
@@ -1041,6 +1064,7 @@ impl Integrations {
                 "event_user_data": e.event_user_data,
                 "require_signature": e.require_signature,
                 "signing_key_set": !e.signing_key.is_empty(),
+                "phone_country_code": e.phone_country_code,
             },
         })
     }
@@ -1331,6 +1355,36 @@ mod tests {
         i.set_enrichment(with(false, "")).unwrap();
         assert!(enrich().get("signingKey").is_none());
         assert_eq!(i.view()["enrichment"]["signing_key_set"], true);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_phone_country_code_reaches_the_tags_as_digits() {
+        let path = temp("phone-code");
+        let i = open(&path);
+        i.set_provider(
+            "tiktok",
+            true,
+            fields(&[("pixel_code", "P1"), ("access_token", "t")]),
+        )
+        .unwrap();
+        let with = |code: &str| Enrichment {
+            phone_country_code: code.into(),
+            ..Default::default()
+        };
+        let tag = || i.resolved().container.tags[1].data.clone();
+        // None unless set; no endpoint is needed for it.
+        assert!(tag().get("phoneCountryCode").is_none());
+        for written in ["90", "+90", " 0090 "] {
+            i.set_enrichment(with(written)).unwrap();
+            assert_eq!(tag()["phoneCountryCode"], "90", "{written}");
+            assert_eq!(i.view()["enrichment"]["phone_country_code"], "90");
+        }
+        for bad in ["TR", "9o", "12345", "+1-212"] {
+            assert!(i.set_enrichment(with(bad)).is_err(), "{bad}");
+        }
+        i.set_enrichment(with("")).unwrap();
+        assert!(tag().get("phoneCountryCode").is_none());
         std::fs::remove_file(&path).ok();
     }
 

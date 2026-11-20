@@ -28,22 +28,64 @@ const hash = (v) => {
   const s = makeString(v).trim();
   return isHash(s.toLowerCase()) ? s.toLowerCase() : sha256Sync(s.toLowerCase(), { outputEncoding: 'hex' });
 };
+// A phone number as the platforms match it: digits only, country code
+// first, no leading zeros. "+49 170 1234567" and "0049 170 1234567" are
+// 491701234567. A number written without its country code ("0170 1234567")
+// can only be matched when the tag knows the country: with
+// `data.phoneCountryCode` ("49") the trunk zero goes and the code is put in
+// front; a number that already starts with the code is left as it is.
+// Without that setting such a number is hashed as its digits, and matches
+// nothing. Returns '' when there are no digits.
+const phoneDigits = (v) => {
+  const s = makeString(v).trim();
+  const digits = s.replace(/[^0-9]/g, '');
+  const international = s.charAt(0) === '+' || digits.indexOf('00') === 0;
+  const national = digits.replace(/^0+/, '');
+  const code = makeString(data.phoneCountryCode || '').replace(/[^0-9]/g, '');
+  if (!national || international || !code) return national;
+  const trunk = digits.charAt(0) === '0';
+  return trunk || national.indexOf(code) !== 0 ? code + national : national;
+};
 // Phone numbers are hashed as digits only, country code first.
 const hashPhone = (v) => {
   if (v === undefined || v === null || v === '') return undefined;
   const s = makeString(v).trim();
   if (isHash(s.toLowerCase())) return s.toLowerCase();
-  const digits = s.replace(/[^0-9]/g, '');
+  const digits = phoneDigits(s);
   return digits ? sha256Sync(digits, { outputEncoding: 'hex' }) : undefined;
 };
-// TikTok and X match on the E.164 number, with its plus: "+491701234567".
+// TikTok, X and Google match on the E.164 number, with its plus:
+// "+491701234567".
 const hashPhoneE164 = (v) => {
   if (v === undefined || v === null || v === '') return undefined;
   const s = makeString(v).trim();
   if (isHash(s.toLowerCase())) return s.toLowerCase();
-  const digits = s.replace(/[^0-9]/g, '').replace(/^00/, '');
+  const digits = phoneDigits(s);
   return digits ? sha256Sync('+' + digits, { outputEncoding: 'hex' }) : undefined;
 };
+// The same value written two ways must hash the same, so each field is
+// brought to the form the platforms ask for before it is hashed. A value
+// that is already a SHA-256 digest is passed on as it is.
+const hashAs = (v, normalise) => {
+  if (v === undefined || v === null || v === '') return undefined;
+  const s = makeString(v).trim().toLowerCase();
+  if (isHash(s)) return s;
+  const n = normalise(s);
+  return n ? sha256Sync(n, { outputEncoding: 'hex' }) : undefined;
+};
+// A city or a state: lower case, letters and digits only, so "New York",
+// "new-york" and "St. Louis" are newyork and stlouis.
+const hashPlace = (v) => hashAs(v, (s) => s.replace(/[^\p{L}\p{N}]/gu, ''));
+// A postcode: lower case, no spaces and no dashes ("M1 1AE" is m11ae,
+// "00-950" is 00950), and the five digits of a US ZIP+4 ("94035-1234" is
+// 94035).
+const hashZip = (v) => hashAs(v, (s) => {
+  const z = s.replace(/\s/g, '');
+  return /^\d{5}-\d{4}$/.test(z) ? z.substring(0, 5) : z.replace(/-/g, '');
+});
+// A name for Meta, which wants no punctuation: "O'Brien" is obrien and
+// "Anne-Marie" is annemarie; the space in "Mary Jane" stays.
+const hashName = (v) => hashAs(v, (s) => s.replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim());
 const clean = (obj) => {
   const out = {};
   Object.keys(obj).forEach((k) => {

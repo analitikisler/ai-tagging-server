@@ -431,7 +431,40 @@ pub fn pinned_entry(
     ] {
         m.insert(k.into(), request[k].clone());
     }
-    json!({ "id": id, "label": label, "tenant": tenant, "at": at, "request": m })
+    let mut request = Value::Object(m);
+    without_address(&mut request);
+    json!({ "id": id, "label": label, "tenant": tenant, "at": at, "request": request })
+}
+
+/// The address a pinned hit is replayed from: one reserved for examples,
+/// that no visitor has.
+pub const PINNED_ADDRESS: &str = "192.0.2.1";
+
+/// Takes the visitor's IP address out of a hit that is kept as a test case:
+/// the address it came from, the headers that carry it and the parameters
+/// that name it. A test case is kept for months and replayed on every
+/// check; whose machine sent it plays no part in what the tags do. Says
+/// whether anything was changed.
+pub fn without_address(request: &mut Value) -> bool {
+    use crate::traces::{IP_HEADERS, IP_KEYS, drop_params};
+    let before = request.clone();
+    request["remote_address"] = json!(PINNED_ADDRESS);
+    if let Some(headers) = request["headers"].as_array_mut() {
+        headers.retain(|h| {
+            let name = h[0].as_str().unwrap_or_default().to_ascii_lowercase();
+            !IP_HEADERS.contains(&name.as_str())
+        });
+    }
+    for part in ["query", "body"] {
+        if let Some(text) = request[part].as_str() {
+            let lines: Vec<String> = text
+                .split('\n')
+                .map(|line| drop_params(line, IP_KEYS))
+                .collect();
+            request[part] = json!(lines.join("\n"));
+        }
+    }
+    *request != before
 }
 
 #[cfg(test)]

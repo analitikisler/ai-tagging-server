@@ -135,6 +135,9 @@ async fn main() {
             "CLICK_ID_ALIASES",
             "VISITOR_INFO",
             "BOT_HANDLING",
+            "STRIP_URL_PARAMS",
+            "KEEP_URL_PARAMS",
+            "COOKIES_WITHOUT_CONSENT",
         ] {
             if std::env::var(var).is_ok_and(|v| !v.is_empty()) {
                 tracing::warn!("{var} is ignored with {instead}");
