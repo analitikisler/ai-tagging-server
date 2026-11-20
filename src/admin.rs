@@ -29,7 +29,7 @@ use crate::history::{self, Before, History};
 use crate::integrations::{Enrichment, Integrations, TestOverrides, test_event};
 use crate::metrics::{self, METRICS};
 use crate::replay::{self, Hit};
-use crate::request::{IncomingRequest, remote_address, same};
+use crate::request::{IncomingRequest, forwarded_address, same};
 use crate::sandbox::RunResult;
 use crate::server::{Pool, Target, summarize};
 use crate::state::State as StateStore;
@@ -205,10 +205,42 @@ async fn gate(
         && path != "/admin/api/alerts/check"
         && let Err(r) = authorize(&a, req.headers()).await
     {
-        return *r;
+        return guarded(*r);
     }
-    next.run(req).await
+    guarded(next.run(req).await)
 }
+
+/// Every answer of the console and its API: read as the type it says it is,
+/// and its address never passed on to another site in a `Referer`.
+fn guarded(mut res: Response) -> Response {
+    let h = res.headers_mut();
+    h.entry(header::X_CONTENT_TYPE_OPTIONS)
+        .or_insert(header::HeaderValue::from_static("nosniff"));
+    h.entry(header::REFERRER_POLICY)
+        .or_insert(header::HeaderValue::from_static("no-referrer"));
+    res
+}
+
+/// The text of the console's own script: the one `<script>` without a `src`.
+fn console_script(html: &str) -> &str {
+    let start = html.find("<script>").map_or(0, |at| at + "<script>".len());
+    let end = html[start..]
+        .find("</script>")
+        .map_or(html.len(), |at| start + at);
+    &html[start..end]
+}
+
+/// What the console page may load and run. Its script is allowed by a
+/// digest of its text, so nothing else runs as script on the page: not an
+/// inline handler, not a script element, whatever a value on the page says.
+static CONSOLE_CSP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    use base64::Engine as _;
+    let digest = sha2::Sha256::digest(console_script(VERSIONED_CONSOLE.as_str()).as_bytes());
+    let digest = base64::engine::general_purpose::STANDARD.encode(digest);
+    format!(
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-{digest}'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+    )
+});
 
 /// The console with each asset's URL carrying a hash of its content
 /// (`favicon.svg?v=1a2b3c4d`), so a changed logo or font is fetched again
@@ -260,10 +292,7 @@ fn page(html: &'static str) -> Response {
             (header::CACHE_CONTROL, "no-store"),
             (header::X_FRAME_OPTIONS, "DENY"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            (
-                header::CONTENT_SECURITY_POLICY,
-                "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'",
-            ),
+            (header::CONTENT_SECURITY_POLICY, CONSOLE_CSP.as_str()),
         ],
         Html(html),
     )
@@ -1024,6 +1053,13 @@ async fn discard_draft(State(a): State<Admin>, headers: HeaderMap) -> Response {
 
 /// Runs the alert checks, with the AI explaining new alerts when it is on.
 pub async fn run_alert_check(a: &Admin) -> Value {
+    // The checks run every few minutes whether or not anyone saves: the
+    // time to take the secrets out of kept files that have had their month,
+    // and to let go of pinned hits that have had their days.
+    let history = a.history.clone();
+    let _ = tokio::task::spawn_blocking(move || history.expire_secrets()).await;
+    let admin = a.clone();
+    let _ = tokio::task::spawn_blocking(move || pinned_list(&admin)).await;
     type Explain =
         dyn Fn(Alert) -> futures_util::future::BoxFuture<'static, Option<Value>> + Send + Sync;
     let explain: Option<Box<Explain>> = a.ai.clone().map(|ai| {
@@ -1181,12 +1217,54 @@ fn replay_hits(a: &Admin, tenant: Option<&str>) -> Vec<Hit> {
 /// Most pinned hits kept.
 const MAX_PINNED: usize = 50;
 
+/// Days a pinned hit is kept (`PINNED_DAYS`, 90 unless set; 0 keeps it
+/// until it is removed). A pinned hit is a visitor's hit, kept in the
+/// state: it shouldn't stay there for good because nobody looked.
+fn pinned_days() -> u64 {
+    std::env::var("PINNED_DAYS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(90)
+}
+
+const DAY_MS: u64 = 86_400_000;
+
+/// When a pinned hit was pinned: its id starts with that time.
+fn pinned_at(id: &str) -> Option<u64> {
+    id.split('-').next()?.parse().ok()
+}
+
 fn pinned_list(a: &Admin) -> Vec<Value> {
-    a.state
-        .list("pinned")
-        .iter()
-        .filter_map(|n| a.state.read(&format!("pinned/{n}")))
-        .collect()
+    pinned_list_at(a, crate::state::now_ms(), pinned_days())
+}
+
+/// The pinned hits, oldest first. One kept past its days is removed here,
+/// and one pinned before addresses were taken out has its own taken out.
+fn pinned_list_at(a: &Admin, now: u64, days: u64) -> Vec<Value> {
+    let mut out = Vec::new();
+    for name in a.state.list("pinned") {
+        let rel = format!("pinned/{name}");
+        let Some(mut p) = a.state.read(&rel) else {
+            continue;
+        };
+        let until = pinned_at(&name)
+            .filter(|_| days > 0)
+            .map(|at| at + days * DAY_MS);
+        if until.is_some_and(|until| until <= now) {
+            a.state.remove(&rel);
+            tracing::info!(
+                "admin: pinned hit {:?} removed after {days} days",
+                p["label"].as_str().unwrap_or_default()
+            );
+            continue;
+        }
+        if replay::without_address(&mut p["request"]) {
+            let _ = a.state.write(&rel, &p);
+        }
+        p["expires_at"] = json!(until);
+        out.push(p);
+    }
+    out
 }
 
 async fn pinned_view(State(a): State<Admin>, headers: HeaderMap) -> Response {
@@ -1343,6 +1421,10 @@ async fn live_start(State(a): State<Admin>, headers: HeaderMap, body: Bytes) -> 
         &json!({ "code": code, "since": now, "preview": b.preview, "send": b.send }),
     ) {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &e);
+    }
+    // The browser's first hit should find it at once on this instance.
+    if let Some(d) = &a.drafts {
+        d.forget_sessions();
     }
     ok(json!({ "code": code, "since": now, "preview": b.preview, "send": b.send }))
 }
@@ -1697,6 +1779,11 @@ async fn undo(
             "no such change, or it can't be undone",
         );
     };
+    // A file whose secrets are no longer kept gets the ones live has now.
+    let text = match editable(&a).and_then(|f| f.text().ok()) {
+        Some((live, _)) => history::with_current_secrets(&text, &live),
+        None => text,
+    };
     let first = json!({ "kind": "undo", "of": id });
     change(
         &a,
@@ -1949,7 +2036,7 @@ pub(crate) fn secret_name(name: &str) -> bool {
         || n.ends_with("key")
 }
 
-fn redact(v: &Value) -> Value {
+pub(crate) fn redact(v: &Value) -> Value {
     match v {
         Value::Object(m) => Value::Object(
             m.iter()
@@ -2147,7 +2234,7 @@ async fn send_test(
             )
         })
         .collect();
-    let ip = remote_address(&pairs, &peer.ip().to_string());
+    let ip = forwarded_address(&pairs, &peer.ip().to_string());
     let header = |name: &str| {
         pairs
             .iter()
@@ -2358,8 +2445,39 @@ mod tests {
             assert_eq!(gone.status(), 404);
 
             let page = http.get(format!("{base}/admin")).send().await.unwrap();
-            let csp = page.headers()["content-security-policy"].to_str().unwrap();
+            let csp = page.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .to_string();
             assert!(csp.contains("font-src 'self'"), "{csp}");
+            assert_eq!(page.headers()["referrer-policy"], "no-referrer");
+            assert_eq!(page.headers()["x-content-type-options"], "nosniff");
+            // Only the console's own script runs: it is named by the digest
+            // of the text the page is served with, and nothing inline is
+            // allowed besides.
+            let html = page.text().await.unwrap();
+            assert_eq!(html.matches("<script").count(), 1);
+            let script = console_script(&html);
+            assert!(script.len() > 100_000 && !script.contains("</script>"));
+            let digest = {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD
+                    .encode(sha2::Sha256::digest(script.as_bytes()))
+            };
+            let scripts = csp
+                .split(';')
+                .map(str::trim)
+                .find(|d| d.starts_with("script-src"))
+                .unwrap();
+            assert_eq!(scripts, format!("script-src 'sha256-{digest}'"));
+            // The API's answers, refusals included, carry the same two.
+            for token in [TOKEN, "wrong"] {
+                let r = call(reqwest::Method::GET, "/admin/api/overview", token)
+                    .await
+                    .unwrap();
+                assert_eq!(r.headers()["x-content-type-options"], "nosniff");
+                assert_eq!(r.headers()["referrer-policy"], "no-referrer");
+            }
             let font = http
                 .get(format!("{base}/admin/assets/google-sans-text.woff2"))
                 .send()
@@ -2585,8 +2703,13 @@ mod tests {
         let req = IncomingRequest {
             method: "GET".into(),
             path: "/g/collect".into(),
-            query: "v=2&tid=G-1&cid=1.2&en=purchase".into(),
-            headers: vec![("user-agent".into(), "Mozilla/5.0 Test".into())],
+            query: "v=2&tid=G-1&cid=1.2&en=purchase&uip=203.0.113.9".into(),
+            headers: vec![
+                ("user-agent".into(), "Mozilla/5.0 Test".into()),
+                ("host".into(), "example.com".into()),
+                ("origin".into(), "https://example.com".into()),
+                ("x-forwarded-for".into(), "203.0.113.9".into()),
+            ],
             remote_address: "203.0.113.9".into(),
             ..Default::default()
         };
@@ -2683,6 +2806,47 @@ mod tests {
             json!(["A purchase"])
         );
         assert_eq!(pinned_list(&admin)[0]["events"], json!(["purchase"]));
+
+        // A pinned hit is kept without the visitor's address: not where it
+        // came from, not in a header, not in a parameter.
+        let now = crate::state::now_ms();
+        let pinned = pinned_list_at(&admin, now, 90);
+        let kept = &pinned[0]["request"];
+        assert_eq!(kept["remote_address"], replay::PINNED_ADDRESS);
+        assert_eq!(kept["query"], "v=2&tid=G-1&cid=1.2&en=purchase");
+        assert!(!pinned[0].to_string().contains("203.0.113.9"), "{pinned:?}");
+        assert!(kept["headers"].to_string().contains("user-agent"));
+        let on_disk = admin.state.list("pinned");
+        let stored = admin.state.read(&format!("pinned/{}", on_disk[0])).unwrap();
+        assert!(!stored.to_string().contains("203.0.113.9"));
+        // It says how long it is kept: 90 days from when it was pinned.
+        let until = pinned[0]["expires_at"].as_u64().unwrap();
+        assert!(until > now + 89 * DAY_MS && until <= now + 90 * DAY_MS);
+        assert_eq!(pinned_list_at(&admin, now + 89 * DAY_MS, 90).len(), 1);
+        // PINNED_DAYS=0 keeps it until someone removes it.
+        let forever = pinned_list_at(&admin, now + 4000 * DAY_MS, 0);
+        assert_eq!(forever.len(), 1);
+        assert!(forever[0]["expires_at"].is_null());
+
+        // One pinned before addresses were taken out loses its own the
+        // next time the list is read, in the state too.
+        let mut old = stored.clone();
+        old["id"] = json!(format!("{now}-99"));
+        old["label"] = json!("Old");
+        old["request"]["remote_address"] = json!("198.51.100.7");
+        old["request"]["headers"] = json!([["x-real-ip", "198.51.100.7"], ["user-agent", "UA"]]);
+        admin
+            .state
+            .write(&format!("pinned/{now}-99.json"), &old)
+            .unwrap();
+        assert_eq!(pinned_list_at(&admin, now, 90).len(), 2);
+        let scrubbed = admin.state.read(&format!("pinned/{now}-99.json")).unwrap();
+        assert!(!scrubbed.to_string().contains("198.51.100.7"), "{scrubbed}");
+        assert_eq!(
+            scrubbed["request"]["headers"],
+            json!([["user-agent", "UA"]])
+        );
+        admin.state.remove(&format!("pinned/{now}-99.json"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), file_text);
         assert!(admin.history.list(10).is_empty());
 
@@ -2720,6 +2884,11 @@ mod tests {
         let entries = admin.history.list(10);
         assert_eq!(entries[0]["edits"][0]["kind"], "undo");
         assert_eq!(entries[0]["edits"][1]["fields"][0], "turned on");
+
+        // Past its days, a pinned hit is let go of, in the state too.
+        let later = crate::state::now_ms() + 91 * DAY_MS;
+        assert!(pinned_list_at(&admin, later, 90).is_empty());
+        assert!(admin.state.list("pinned").is_empty());
         std::fs::remove_dir_all(dir).ok();
     }
 

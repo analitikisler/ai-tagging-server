@@ -72,12 +72,29 @@ async fn main() {
         eprintln!("PROXY_SECRET must be at least 16 characters");
         std::process::exit(1);
     }
-    if proxy_secret.is_none() {
-        tracing::warn!(
-            "PROXY_SECRET is not set: the visitor IP sent to vendors comes from \
-             cf-connecting-ip, x-real-ip or x-forwarded-for, which clients can fake \
-             unless a proxy in front of this server overwrites them"
-        );
+    // The header a proxy in front of the server puts the visitor's IP in.
+    let client_ip_header = std::env::var("CLIENT_IP_HEADER")
+        .ok()
+        .map(|h| h.trim().to_ascii_lowercase())
+        .filter(|h| !h.is_empty());
+    if client_ip_header.as_ref().is_some_and(|h| {
+        !h.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    }) {
+        eprintln!("CLIENT_IP_HEADER must be a header name, such as cf-connecting-ip or x-real-ip");
+        std::process::exit(1);
+    }
+    match (&proxy_secret, &client_ip_header) {
+        (None, None) => tracing::warn!(
+            "PROXY_SECRET is not set: the visitor IP sent to vendors is the address the \
+             connection comes from. Behind a proxy, that is the proxy's: name the header it \
+             puts the visitor's IP in with CLIENT_IP_HEADER (cf-connecting-ip, x-real-ip)"
+        ),
+        (None, Some(h)) => tracing::warn!(
+            "PROXY_SECRET is not set: the visitor IP is read from {h}, which a client can \
+             set itself unless only your proxy can reach this server and it overwrites {h}"
+        ),
+        _ => {}
     }
 
     let tenants_file = std::env::var("TENANTS_FILE").ok().filter(|p| !p.is_empty());
@@ -113,10 +130,14 @@ async fn main() {
             "SITE_DOMAINS",
             "ORIGIN_CHECK",
             "STRIP_USER_DATA",
+            "MAX_EVENT_VALUE",
             "KEEP_COOKIES",
             "CLICK_ID_ALIASES",
             "VISITOR_INFO",
             "BOT_HANDLING",
+            "STRIP_URL_PARAMS",
+            "KEEP_URL_PARAMS",
+            "COOKIES_WITHOUT_CONSENT",
         ] {
             if std::env::var(var).is_ok_and(|v| !v.is_empty()) {
                 tracing::warn!("{var} is ignored with {instead}");
@@ -197,11 +218,26 @@ async fn main() {
                     // Domains whose pages may send hits; by default the request's host.
                     let site_domains = list_env("SITE_DOMAINS");
                     let origin_check =
-                        std::env::var("ORIGIN_CHECK").unwrap_or_else(|_| "log".into());
+                        std::env::var("ORIGIN_CHECK").unwrap_or_else(|_| "enforce".into());
                     if !matches!(origin_check.as_str(), "enforce" | "log" | "off") {
                         eprintln!("ORIGIN_CHECK must be enforce, log or off");
                         std::process::exit(1);
                     }
+                    // A ceiling for an event's value; none unless set.
+                    let max_event_value = match std::env::var("MAX_EVENT_VALUE")
+                        .ok()
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty())
+                    {
+                        None => None,
+                        Some(v) => match v.parse::<f64>() {
+                            Ok(n) if n.is_finite() && n > 0.0 => Some(n),
+                            _ => {
+                                eprintln!("MAX_EVENT_VALUE must be a number above 0");
+                                std::process::exit(1);
+                            }
+                        },
+                    };
                     let features = features::Features::from_env(|k| std::env::var(k).ok())
                         .unwrap_or_else(|e| {
                             eprintln!("{e}");
@@ -212,10 +248,12 @@ async fn main() {
                         measurement_ids,
                         site_domains,
                         origin_check,
-                        strip_user_data: matches!(
+                        // On unless turned off.
+                        strip_user_data: !matches!(
                             std::env::var("STRIP_USER_DATA").as_deref().map(str::trim),
-                            Ok("1" | "true")
+                            Ok("0" | "false")
                         ),
+                        max_event_value,
                         features,
                     });
                     ContainerFile::fixed(container, storage.clone(), stats)
@@ -301,6 +339,7 @@ async fn main() {
         None => state::State::memory(),
     });
     let history = Arc::new(history::History::new(state.clone()));
+    history.expire_secrets();
     let counts = admin_token
         .is_some()
         .then(|| Arc::new(counts::Recorder::new(state.clone())));
@@ -400,6 +439,7 @@ async fn main() {
         admin: admin.clone(),
         debug_token: debug_token.clone(),
         proxy_secret: proxy_secret.clone(),
+        client_ip_header,
         counts: counts.clone(),
         identify: env("SERVER_HEADER", 1u8) != 0,
     };

@@ -8,7 +8,7 @@ This guide covers, for each platform, where to find the credentials, what to ent
 
 - **Consent.** A tag sends only when the hit grants both `ad_storage` and `ad_user_data` (read from `gcd`, with `gcs` as the fallback for ad storage). A denied signal skips the event with `consent:<signal>=denied`. A hit with no signals is skipped with `consent:<signal>=missing`, unless "Send when the hit has no consent signals" is on. That switch is meant for sites without Consent Mode and for Shopify orders, and it never sends a visitor who denied consent.
 - **Event names.** Each platform has its own event names, and GA4 events are mapped to them. An event with no mapping is skipped with `unmapped_event`.
-- **Matching.** Emails, phone numbers and names are normalised and hashed (SHA-256) before they leave the server. Enrichment-endpoint answers and Shopify order `user_data` are used when present.
+- **Matching.** Emails, phone numbers, names and addresses are brought to the form each platform matches on (lower case; phone numbers as digits with the country code first; cities and states without spaces or punctuation; postcodes without spaces or dashes) and hashed (SHA-256) before they leave the server. A phone number without a country code is matched only when "Country code for phone numbers without one" is set under Enrichment. Enrichment-endpoint answers and Shopify order `user_data` are used when present.
 - **Skips and counters.** A skipped event is reported as `skipped`, not as a success, with its reason in the request's log line. `/system` counts skips apart from successes and failures.
 - **Secrets.** Access tokens are never shown again after saving. Leave a secret field empty to keep the saved value.
 

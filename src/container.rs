@@ -158,6 +158,9 @@ pub struct Settings {
     /// The GA4 tag's `stripUserData`: drop plain user-provided data before
     /// forwarding to Google.
     pub strip_user_data: bool,
+    /// The GA4 client's `maxEventValue`: events whose value is beyond it
+    /// are left out. None sets no ceiling.
+    pub max_event_value: Option<f64>,
     /// The GA4 client's optional features.
     pub features: crate::features::Features,
 }
@@ -168,8 +171,9 @@ impl Default for Settings {
             script_ids: vec![],
             measurement_ids: vec![],
             site_domains: vec![],
-            origin_check: "log".into(),
-            strip_user_data: false,
+            origin_check: "enforce".into(),
+            strip_user_data: true,
+            max_event_value: None,
             features: Default::default(),
         }
     }
@@ -179,10 +183,16 @@ impl Container {
     /// The `templateDataStorage` map a template uses. The built-in ad-platform
     /// tags share one, so a visitor looked up for one platform is not looked
     /// up again for the others; every other template has its own.
+    ///
+    /// That shared map holds visitors' details and a Google access token, so
+    /// only the server's own templates get it: a template from a file (it
+    /// has permissions) never does, whatever it is called and however it
+    /// begins, and no template name can spell the shared map's.
     pub fn storage_scope(&self, template: &str) -> String {
+        let own = !self.permissions.contains_key(template);
         match self.templates.get(template) {
-            Some(src) if src.starts_with(PROVIDER_COMMON) => "provider_common".into(),
-            _ => template.into(),
+            Some(src) if own && src.starts_with(PROVIDER_COMMON) => "shared:providers".into(),
+            _ => format!("template:{template}"),
         }
     }
 
@@ -219,6 +229,9 @@ impl Container {
                         });
                         if let Some(m) = data.as_object_mut() {
                             m.extend(s.features.client_data());
+                            if let Some(max) = s.max_event_value {
+                                m.insert("maxEventValue".into(), serde_json::json!(max));
+                            }
                         }
                         data
                     },
@@ -232,10 +245,11 @@ impl Container {
             tags: vec![Tag {
                 name: "GA4".into(),
                 template: "ga4_tag".into(),
+                // The tag strips unless told not to, so only "off" is written.
                 data: if s.strip_user_data {
-                    serde_json::json!({ "stripUserData": true })
-                } else {
                     empty_object()
+                } else {
+                    serde_json::json!({ "stripUserData": false })
                 },
                 fire_when: vec![],
                 enabled: true,

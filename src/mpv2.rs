@@ -32,8 +32,9 @@ pub fn is_mpv2(req: &IncomingRequest) -> bool {
 }
 
 /// Most events taken from one batch: as many as a client can run the
-/// container for. The browser sends 25 at most.
-pub const MAX_EVENTS: usize = 100;
+/// container for. The browser sends 25 at most, and every event runs every
+/// tag, so a larger batch would turn one request into hundreds of sends.
+pub const MAX_EVENTS: usize = 25;
 
 /// One event per body line (batched `POST`), or one for the query alone.
 /// Line parameters override the shared query parameters. Lines past

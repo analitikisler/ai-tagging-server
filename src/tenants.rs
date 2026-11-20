@@ -32,11 +32,12 @@ pub struct Tenant {
     /// Domains whose pages may send hits. Empty means the request's host.
     #[serde(default)]
     pub site_domains: Vec<String>,
-    /// `enforce`, `log` or `off`.
-    #[serde(default = "log")]
+    /// `enforce` (when left out), `log` or `off`.
+    #[serde(default = "enforce")]
     pub origin_check: String,
-    /// The GA4 tag drops plain user-provided data before forwarding.
-    #[serde(default)]
+    /// The GA4 tag drops plain user-provided data before forwarding. On
+    /// when left out.
+    #[serde(default = "yes")]
     pub strip_user_data: bool,
     /// The GA4 client's optional features.
     #[serde(default)]
@@ -46,8 +47,8 @@ pub struct Tenant {
 fn yes() -> bool {
     true
 }
-fn log() -> String {
-    "log".into()
+fn enforce() -> String {
+    "enforce".into()
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -114,6 +115,7 @@ impl Tenant {
             site_domains: self.site_domains.clone(),
             origin_check: self.origin_check.clone(),
             strip_user_data: self.strip_user_data,
+            max_event_value: None,
             features: self.features.clone(),
         })
     }
@@ -478,6 +480,31 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tenants-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("tenants.json")
+    }
+
+    #[test]
+    fn a_tenant_that_says_nothing_is_protected() {
+        let mut t: Tenant = serde_json::from_value(json!({
+            "id": "shop", "hosts": ["example.com"], "measurement_ids": ["G-ABC123"]
+        }))
+        .unwrap();
+        t.validate().unwrap();
+        assert_eq!(t.origin_check, "enforce");
+        assert!(t.strip_user_data);
+        let c = t.container();
+        assert_eq!(c.clients[0].data["originCheck"], "enforce");
+        assert!(c.tags[0].data.get("stripUserData").is_none());
+
+        // Written out, the choice is kept.
+        let mut t: Tenant = serde_json::from_value(json!({
+            "id": "shop", "hosts": ["example.com"], "measurement_ids": ["G-ABC123"],
+            "origin_check": "log", "strip_user_data": false
+        }))
+        .unwrap();
+        t.validate().unwrap();
+        let c = t.container();
+        assert_eq!(c.clients[0].data["originCheck"], "log");
+        assert_eq!(c.tags[0].data["stripUserData"], false);
     }
 
     #[test]

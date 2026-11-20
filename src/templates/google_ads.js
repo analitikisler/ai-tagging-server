@@ -14,6 +14,9 @@
 // The click is kept only when Consent Mode grants ad_storage, and a conversion
 // is sent only when it grants ad_user_data too; otherwise the tag is skipped
 // with the reason (send_without_consent lets hits without signals through).
+// Google is told what the hit said and nothing more: a signal the hit didn't
+// carry (an order from a webhook, a site without Consent Mode) is left out,
+// which Google reads as unspecified, rather than reported as granted.
 //
 // Settings (tag `data`): customer_id (the Google Ads account the conversion
 // action is in, digits), conversion_action_id, login_customer_id (optional:
@@ -126,13 +129,7 @@ const googleEmail = (v) => {
   }
   return sha256Sync(s, { outputEncoding: 'hex' });
 };
-const googlePhone = (v) => {
-  if (v === undefined || v === null || v === '') return undefined;
-  const s = makeString(v).trim();
-  if (isHash(s.toLowerCase())) return s.toLowerCase();
-  const d = s.replace(/[^0-9]/g, '');
-  return d ? sha256Sync('+' + d, { outputEncoding: 'hex' }) : undefined;
-};
+const googlePhone = hashPhoneE164;
 
 // An access token from the refresh token, kept until a minute before it ends.
 const withToken = (then, fail) => {
@@ -196,13 +193,12 @@ fetchExtra((x) => {
   const payload = {
     destinations: [destination],
     encoding: 'HEX',
-    // A visitor who turned ad personalisation down is reported as such.
-    consent: {
-      adUserData: 'CONSENT_GRANTED',
-      adPersonalization: consent.ad_personalization === 'denied' ? 'CONSENT_DENIED' : 'CONSENT_GRANTED',
-    },
     events: [event],
   };
+  // Each signal as the hit gave it; one it didn't give is not claimed.
+  const said = (v) => (v === 'granted' ? 'CONSENT_GRANTED' : v === 'denied' ? 'CONSENT_DENIED' : undefined);
+  const told = clean({ adUserData: said(consent.ad_user_data), adPersonalization: said(consent.ad_personalization) });
+  if (Object.keys(told).length) payload.consent = told;
   if (isOn(data.test_mode)) payload.validateOnly = true;
   withToken((token) => {
     sendHttpRequest('https://datamanager.googleapis.com/v1/events:ingest', {

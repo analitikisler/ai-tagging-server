@@ -493,7 +493,25 @@ pub struct Enrichment {
     /// an endpoint; where both have a field, the endpoint's answer wins.
     #[serde(default)]
     pub event_user_data: bool,
+    /// Look a visitor up only when the event carries the site's signature
+    /// of the id (`user_id_sig` or `client_id_sig`): the HMAC-SHA256 of the
+    /// id with `signing_key`, as hex. Without it, whoever sends a hit picks
+    /// whose details are looked up.
+    #[serde(default)]
+    pub require_signature: bool,
+    /// The key the site signs ids with. Kept when signatures are turned
+    /// off, so turning them on again needs no new key.
+    #[serde(default)]
+    pub signing_key: String,
+    /// The calling code of the country the site's customers are in, digits
+    /// only ("90", "49"): put in front of a phone number that comes without
+    /// one, so it can be matched. Empty leaves such numbers as they are.
+    #[serde(default)]
+    pub phone_country_code: String,
 }
+
+/// Fewest characters of a signing key.
+const MIN_SIGNING_KEY: usize = 16;
 
 fn user_id() -> String {
     "user_id".into()
@@ -508,6 +526,9 @@ impl Default for Enrichment {
             header_name: String::new(),
             header_value: String::new(),
             event_user_data: false,
+            require_signature: false,
+            signing_key: String::new(),
+            phone_country_code: String::new(),
         }
     }
 }
@@ -628,6 +649,31 @@ impl Config {
         {
             return Err("enrichment: odd header name or value".into());
         }
+        e.signing_key = e.signing_key.trim().to_string();
+        if !e.signing_key.is_empty()
+            && (e.signing_key.len() < MIN_SIGNING_KEY || !plain(&e.signing_key, 256))
+        {
+            return Err(format!(
+                "enrichment: the signing key must be {MIN_SIGNING_KEY} to 256 plain characters"
+            ));
+        }
+        if e.require_signature && e.signing_key.is_empty() {
+            return Err("enrichment: checking signatures needs a signing key".into());
+        }
+        // "+90" and "0090" are the same code as "90".
+        e.phone_country_code = e
+            .phone_country_code
+            .trim()
+            .trim_start_matches('+')
+            .trim_start_matches('0')
+            .to_string();
+        if e.phone_country_code.len() > 4
+            || !e.phone_country_code.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Err(
+                "enrichment: the phone country code is 1 to 4 digits, such as 90 or 49".into(),
+            );
+        }
         Ok(())
     }
 
@@ -667,18 +713,22 @@ impl Config {
         }
         let e = &self.enrichment;
         if def.enriched && e.enabled && !e.url.is_empty() {
-            data.insert(
-                "enrich".into(),
-                json!({
-                    "url": e.url,
-                    "key": e.key,
-                    "headerName": e.header_name,
-                    "headerValue": e.header_value,
-                }),
-            );
+            let mut enrich = json!({
+                "url": e.url,
+                "key": e.key,
+                "headerName": e.header_name,
+                "headerValue": e.header_value,
+            });
+            if e.require_signature {
+                enrich["signingKey"] = json!(e.signing_key);
+            }
+            data.insert("enrich".into(), enrich);
         }
         if e.event_user_data {
             data.insert("eventUserData".into(), Value::Bool(true));
+        }
+        if !e.phone_country_code.is_empty() {
+            data.insert("phoneCountryCode".into(), json!(e.phone_country_code));
         }
         Tag {
             name: def.name.into(),
@@ -1012,6 +1062,9 @@ impl Integrations {
                 "header_name": e.header_name,
                 "header_value_set": !e.header_value.is_empty(),
                 "event_user_data": e.event_user_data,
+                "require_signature": e.require_signature,
+                "signing_key_set": !e.signing_key.is_empty(),
+                "phone_country_code": e.phone_country_code,
             },
         })
     }
@@ -1053,13 +1106,17 @@ impl Integrations {
     }
 
     /// Saves the enrichment endpoint. A header value sent empty keeps the
-    /// stored one, unless the header name is cleared too.
+    /// stored one, unless the header name is cleared too; a signing key
+    /// sent empty keeps the stored one.
     pub fn set_enrichment(&self, mut e: Enrichment) -> Result<(), String> {
         let _w = self.write.lock().expect("write");
         self.reload_if_changed();
         let mut config = self.state.read().expect("integrations").config.clone();
         if e.header_value.trim().is_empty() && !e.header_name.trim().is_empty() {
             e.header_value = config.enrichment.header_value.clone();
+        }
+        if e.signing_key.trim().is_empty() {
+            e.signing_key = config.enrichment.signing_key.clone();
         }
         config.enrichment = e;
         self.commit(config)
@@ -1222,7 +1279,7 @@ mod tests {
             key: "user_id".into(),
             header_name: "x-api-key".into(),
             header_value: "s3cret".into(),
-            event_user_data: false,
+            ..Default::default()
         })
         .unwrap();
         let enrich = i.resolved().container.tags[1].data["enrich"].clone();
@@ -1235,7 +1292,7 @@ mod tests {
             key: "client_id".into(),
             header_name: "x-api-key".into(),
             header_value: String::new(),
-            event_user_data: false,
+            ..Default::default()
         })
         .unwrap();
         let enrich = i.resolved().container.tags[1].data["enrich"].clone();
@@ -1258,6 +1315,76 @@ mod tests {
         assert!(data.get("enrich").is_none());
         assert_eq!(i.view()["enrichment"]["event_user_data"], true);
         assert!(!i.view().to_string().contains("s3cret"));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn signed_lookups_need_a_key_that_is_kept_and_never_shown() {
+        let path = temp("enrich-signed");
+        let i = open(&path);
+        i.set_provider(
+            "tiktok",
+            true,
+            fields(&[("pixel_code", "P1"), ("access_token", "t")]),
+        )
+        .unwrap();
+        let with = |signed: bool, key: &str| Enrichment {
+            enabled: true,
+            url: "https://shop.example/lookup".into(),
+            require_signature: signed,
+            signing_key: key.into(),
+            ..Default::default()
+        };
+        let enrich = || i.resolved().container.tags[1].data["enrich"].clone();
+        // Checking signatures without a key, or with a short one, is refused.
+        assert!(i.set_enrichment(with(true, "")).is_err());
+        assert!(i.set_enrichment(with(true, "too-short")).is_err());
+        i.set_enrichment(with(true, " 0123456789abcdef-key "))
+            .unwrap();
+        assert_eq!(enrich()["signingKey"], "0123456789abcdef-key");
+        // Saving again without the key keeps it, and the view only says
+        // that there is one.
+        i.set_enrichment(with(true, "")).unwrap();
+        assert_eq!(enrich()["signingKey"], "0123456789abcdef-key");
+        let view = i.view();
+        assert_eq!(view["enrichment"]["require_signature"], true);
+        assert_eq!(view["enrichment"]["signing_key_set"], true);
+        assert!(!view.to_string().contains("0123456789abcdef-key"));
+        // Turned off, the tags get no key and look visitors up as before;
+        // the key stays for the next time.
+        i.set_enrichment(with(false, "")).unwrap();
+        assert!(enrich().get("signingKey").is_none());
+        assert_eq!(i.view()["enrichment"]["signing_key_set"], true);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_phone_country_code_reaches_the_tags_as_digits() {
+        let path = temp("phone-code");
+        let i = open(&path);
+        i.set_provider(
+            "tiktok",
+            true,
+            fields(&[("pixel_code", "P1"), ("access_token", "t")]),
+        )
+        .unwrap();
+        let with = |code: &str| Enrichment {
+            phone_country_code: code.into(),
+            ..Default::default()
+        };
+        let tag = || i.resolved().container.tags[1].data.clone();
+        // None unless set; no endpoint is needed for it.
+        assert!(tag().get("phoneCountryCode").is_none());
+        for written in ["90", "+90", " 0090 "] {
+            i.set_enrichment(with(written)).unwrap();
+            assert_eq!(tag()["phoneCountryCode"], "90", "{written}");
+            assert_eq!(i.view()["enrichment"]["phone_country_code"], "90");
+        }
+        for bad in ["TR", "9o", "12345", "+1-212"] {
+            assert!(i.set_enrichment(with(bad)).is_err(), "{bad}");
+        }
+        i.set_enrichment(with("")).unwrap();
+        assert!(tag().get("phoneCountryCode").is_none());
         std::fs::remove_file(&path).ok();
     }
 

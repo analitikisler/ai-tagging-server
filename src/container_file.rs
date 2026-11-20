@@ -281,6 +281,9 @@ impl ContainerFile {
                     "clickIdAliases",
                     "visitorInfo",
                     "botHandling",
+                    "stripUrlParams",
+                    "keepUrlParams",
+                    "cookiesWithoutConsent",
                 ] {
                     data.remove(k);
                 }

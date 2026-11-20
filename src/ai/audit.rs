@@ -422,7 +422,7 @@ pub(super) fn check(answer: &Value, container: &Value, counts: &Counts, model: &
         let edit = if change == "remove_tag" {
             Some(json!({ "action": "remove", "tag": { "name": tag } }))
         } else {
-            parse_change(f["tag_json"].as_str().unwrap_or_default(), &names)
+            parse_change(f["tag_json"].as_str().unwrap_or_default(), container)
         };
         findings.push(json!({
             "kind": text(f, "kind"),

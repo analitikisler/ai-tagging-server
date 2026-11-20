@@ -7,8 +7,10 @@
 //! that live is still that revision, so a hand edit or another publish
 //! made meanwhile isn't overwritten without saying so.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -27,6 +29,28 @@ pub struct Draft {
     pub updated_at: u64,
 }
 
+/// A live check as a hit sees it: when it began, whether its browser runs
+/// the draft, and whether a preview's sends really go out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Session {
+    pub since: u64,
+    pub preview: bool,
+    pub send: bool,
+}
+
+/// The live checks in the shared state, as last read.
+#[derive(Default)]
+struct Sessions {
+    read_at: Option<Instant>,
+    by_code: HashMap<String, Session>,
+}
+
+/// How long a code no session is known for stays unknown before the shared
+/// state is read again. Any hit can carry a code, so a lookup must not cost
+/// a read: with this, all of them together cost one a second at most, and a
+/// preview started on another instance is found within that second.
+const SESSIONS_FOR: Duration = Duration::from_secs(1);
+
 pub struct Drafts {
     state: Arc<State>,
     file: Arc<ContainerFile>,
@@ -39,6 +63,8 @@ pub struct Drafts {
     /// Held across an edit or a publish, so two at once on this instance
     /// can't both read the same draft and the later one drop the earlier.
     write: Mutex<()>,
+    /// The live checks a hit's code is looked up in.
+    sessions: Mutex<Sessions>,
 }
 
 impl Drafts {
@@ -51,7 +77,51 @@ impl Drafts {
             storage: Default::default(),
             epoch: AtomicU64::new(1),
             write: Mutex::default(),
+            sessions: Mutex::default(),
         }
+    }
+
+    /// The live check a hit's code names, from memory: a session doesn't
+    /// change once started, so one that is known is never read again, and
+    /// an unknown code leads to the shared state at most once a second.
+    pub fn session(&self, code: &str) -> Option<Session> {
+        self.session_at(code, Instant::now())
+    }
+
+    fn session_at(&self, code: &str, now: Instant) -> Option<Session> {
+        let mut s = self.sessions.lock().expect("sessions");
+        if let Some(found) = s.by_code.get(code) {
+            return Some(*found);
+        }
+        let fresh = s
+            .read_at
+            .is_some_and(|at| now.saturating_duration_since(at) < SESSIONS_FOR);
+        if fresh {
+            return None;
+        }
+        s.read_at = Some(now);
+        s.by_code = self
+            .state
+            .list("checkup")
+            .iter()
+            .filter(|name| name.starts_with("live-"))
+            .filter_map(|name| {
+                let v = self.state.read(&format!("checkup/{name}"))?;
+                let session = Session {
+                    since: v["since"].as_u64()?,
+                    preview: v["preview"] == json!(true),
+                    send: v["send"] == json!(true),
+                };
+                Some((v["code"].as_str()?.to_string(), session))
+            })
+            .collect();
+        s.by_code.get(code).copied()
+    }
+
+    /// Forgets what was read, so the next lookup reads again: after a live
+    /// check is started here, its first hit finds it.
+    pub fn forget_sessions(&self) {
+        *self.sessions.lock().expect("sessions") = Sessions::default();
     }
 
     pub fn get(&self) -> Option<Draft> {
@@ -194,6 +264,62 @@ mod tests {
     fn off() -> Tag {
         serde_json::from_value(json!({ "name": "GA4", "template": "ga4_tag", "enabled": false }))
             .unwrap()
+    }
+
+    #[test]
+    fn a_hits_code_is_looked_up_in_memory() {
+        let (_, _, d) = setup("sessions");
+        let start = |code: &str, preview: bool, send: bool| {
+            d.state
+                .write(
+                    &format!("checkup/live-{code}.json"),
+                    &json!({ "code": code, "since": 1000, "preview": preview, "send": send }),
+                )
+                .unwrap();
+        };
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+
+        // The first lookup reads the shared state; the setup check's own
+        // files there are not sessions.
+        d.state
+            .write("checkup/default.json", &json!({ "site_url": "" }))
+            .unwrap();
+        start("aaaaaaaa", true, false);
+        let a = Session {
+            since: 1000,
+            preview: true,
+            send: false,
+        };
+        assert_eq!(d.session_at("aaaaaaaa", t0), Some(a));
+
+        // Codes nobody started: answered from memory, however many come.
+        // A session that appears meanwhile shows that nothing was read.
+        start("bbbbbbbb", false, true);
+        for (i, code) in ["cccccccc", "dddddddd", "bbbbbbbb"].iter().enumerate() {
+            assert_eq!(d.session_at(code, t0 + ms(100 * i as u64)), None, "{code}");
+        }
+        // A known session is never read again, even once the state is.
+        assert_eq!(d.session_at("aaaaaaaa", t0 + ms(900)), Some(a));
+
+        // A second later the state is read once more, and the session
+        // another instance started is found.
+        let b = d.session_at("bbbbbbbb", t0 + ms(1000)).unwrap();
+        assert_eq!((b.preview, b.send), (false, true));
+
+        // One started on this instance is found at once.
+        start("eeeeeeee", true, true);
+        assert_eq!(d.session_at("eeeeeeee", t0 + ms(1100)), None);
+        d.forget_sessions();
+        assert!(d.session_at("eeeeeeee", t0 + ms(1100)).is_some());
+
+        // A file that isn't a session doesn't break the others.
+        d.state
+            .write("checkup/live-ffffffff.json", &json!({ "code": "ffffffff" }))
+            .unwrap();
+        d.forget_sessions();
+        assert_eq!(d.session_at("ffffffff", t0 + ms(1200)), None);
+        assert_eq!(d.session_at("aaaaaaaa", t0 + ms(1200)), Some(a));
     }
 
     #[test]

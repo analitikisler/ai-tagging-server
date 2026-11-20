@@ -40,11 +40,13 @@ fn engine_answering(container: Container, status: u16, body: &str) -> (Engine, A
         status,
         body: body.into(),
     });
+    // Far more than a run needs: on a busy machine a run that takes its
+    // time is slow, not wrong. Only a template that never ends waits it out.
     let engine = Engine::new(
         Arc::new(container),
         Default::default(),
         rec.clone(),
-        Duration::from_millis(500),
+        Duration::from_secs(3),
         32 * 1024 * 1024,
     )
     .unwrap();
@@ -220,6 +222,23 @@ fn extends_ga_cookies_by_default_unless_analytics_is_denied() {
 
     let r = engine.run(ga4_hit("v=2&tid=G-ABC&en=page_view&gcs=G100", ""));
     assert!(set_cookies(&r).is_empty());
+
+    // The hit has to say so: one with no consent signal leaves the cookie
+    // alone, as it leaves the ad cookies alone. gcd's second letter counts
+    // before gcs.
+    for (signals, kept) in [
+        ("", false),
+        ("&gcd=13r3r3r2r5l1", true),
+        ("&gcd=13r3q3r2r5l1", false),
+        ("&gcs=G111&gcd=13r3q3r2r5l1", false),
+        ("&gcs=G100&gcd=13r3r3r2r5l1", true),
+        // The letter l: analytics_storage not set, so gcs decides.
+        ("&gcd=13r3l3r2r5l1", false),
+        ("&gcs=G101&gcd=13r3l3r2r5l1", true),
+    ] {
+        let r = engine.run(ga4_hit(&format!("v=2&tid=G-ABC&en=page_view{signals}"), ""));
+        assert_eq!(!set_cookies(&r).is_empty(), kept, "{signals:?}");
+    }
 
     let mut c = Container::builtin();
     c.clients[0].data = json!({"extendGaCookie": false});
@@ -688,7 +707,7 @@ fn full_template_storage_still_takes_new_keys() {
         r.logs
     );
     let storage = engine.storage.lock().unwrap();
-    assert_eq!(storage["c"].len(), 10_000);
+    assert_eq!(storage["template:c"].len(), 10_000);
 }
 
 #[test]
@@ -1755,7 +1774,10 @@ fn linkedin_sends_mapped_conversions_and_skips_unmatchable_visitors() {
     );
     assert!(bodies(&rec, "https://api.linkedin.com").is_empty());
 
-    let hit = PURCHASE.replace("thanks", "thanks%3Fli_fat_id%3Dfat-1");
+    // Another order: the same one again would be left out as a duplicate.
+    let hit = PURCHASE
+        .replace("thanks", "thanks%3Fli_fat_id%3Dfat-1")
+        .replace("transaction_id=T1", "transaction_id=T2");
     let r = engine.run(ga4_hit(&hit, ""));
     assert_eq!(
         r.tags[1].outcome,
@@ -1809,7 +1831,9 @@ fn x_sends_a_signed_conversion() {
 
     let hit = format!(
         "{}&pr1=idSKU1~nmShirt~pr19.9~qt2",
-        PURCHASE.replace("thanks", "thanks%3Ftwclid%3Dtw-click")
+        PURCHASE
+            .replace("thanks", "thanks%3Ftwclid%3Dtw-click")
+            .replace("transaction_id=T1", "transaction_id=T2")
     );
     let r = engine.run(ga4_hit(&hit, ""));
     assert_eq!(
@@ -2095,8 +2119,11 @@ fn enrichment_adds_hashed_fields_from_the_sites_server() {
     );
     drop(sent);
 
-    // The next event reuses the answer kept from the first, for both tags.
-    engine.run(meta_hit(PURCHASE));
+    // The next order reuses the answer kept from the first, for both tags.
+    let r = engine.run(meta_hit(
+        &PURCHASE.replace("transaction_id=T1", "transaction_id=T2"),
+    ));
+    assert_eq!(r.events.len(), 1, "{:?}", r.logs);
     let again = rec
         .sent
         .lock()
@@ -2325,7 +2352,7 @@ fn the_enrichment_answer_wins_field_by_field() {
 }
 
 #[test]
-fn ga4_tag_strips_plain_user_data_only_when_asked() {
+fn ga4_tag_strips_plain_user_data_unless_told_not_to() {
     let query = "v=2&tid=G-TEST000001&cid=111.222&en=sign_up\
         &ep.user_data.email_address=a%40b.c&epn.user_data.address.postal_code=10115\
         &ep.user_data.sha256_phone_number=abc123&ep.user_data._tag_mode=MANUAL\
@@ -2348,6 +2375,15 @@ fn ga4_tag_strips_plain_user_data_only_when_asked() {
         kept.contains("ep.user_data.email_address=a%40b.c"),
         "{kept}"
     );
+
+    // A tag with no setting at all strips: a container file's GA4 tag,
+    // and the built-in container as it starts.
+    let (engine, rec) = engine_with(Container::builtin(), 204);
+    assert_eq!(Container::builtin().tags[0].data, json!({}));
+    engine.run(ga4_hit(query, ""));
+    let default = rec.sent.lock().unwrap()[0].url.clone();
+    assert!(!default.contains("ep.user_data.email_address"), "{default}");
+    assert!(default.contains("ep.plan=pro"), "{default}");
 
     let url = sent_url(true);
     for gone in [
@@ -2514,7 +2550,10 @@ fn google_ads_sends_a_conversion_with_the_click_and_a_cached_token() {
     // The token is reused by the next conversion, and a visitor who denied
     // ad personalisation (the fourth letter of gcd) is reported so.
     let mut req = req;
-    req.query = req.query.replace("gcd=13r3r3r2r5l1", "gcd=13r3r3r2q5l1");
+    req.query = req
+        .query
+        .replace("gcd=13r3r3r2r5l1", "gcd=13r3r3r2q5l1")
+        .replace("transaction_id=T1", "transaction_id=T2");
     engine.run(req);
     let ingest = bodies(&rec, "https://datamanager.googleapis.com/v1/events:ingest");
     assert_eq!(
@@ -2931,4 +2970,677 @@ fn outcomes_keep_the_words_traces_and_the_console_know() {
     // Only a failure, an exception or a timeout went wrong.
     assert!(!TagOutcome::Skipped.went_wrong() && !TagOutcome::Success.went_wrong());
     assert!(TagOutcome::Timeout.went_wrong() && TagOutcome::Failure.went_wrong());
+}
+
+/// The built-in container with its GA4 client's data changed.
+fn client_with(change: impl FnOnce(&mut serde_json::Value)) -> Container {
+    let mut c = Container::builtin_with(&Settings {
+        measurement_ids: vec!["G-TEST000001".into(), "G-TEST000002".into()],
+        ..Default::default()
+    });
+    change(&mut c.clients[0].data);
+    c.compile().unwrap();
+    c
+}
+
+#[test]
+fn hits_from_elsewhere_are_refused_unless_the_check_is_loosened() {
+    // Neither the environment nor the container says anything about the
+    // origin check: the client's own default applies.
+    let c = client_with(|d| {
+        d.as_object_mut().unwrap().remove("originCheck");
+    });
+    assert!(c.clients[0].data.get("originCheck").is_none());
+    let (engine, rec) = engine_with(c, 204);
+    let hit = || ga4_hit("v=2&tid=G-TEST000001&cid=1.2&en=page_view", "");
+
+    let foreign = engine.run(with_header(hit(), "origin", Some("https://evil.example")));
+    assert_eq!(foreign.response.status, 403);
+    // No Origin and no Referer: not a page of this site either.
+    let bare = engine.run(with_header(hit(), "origin", None));
+    assert_eq!(bare.response.status, 403);
+    assert!(rec.sent.lock().unwrap().is_empty());
+    assert!(
+        bare.logs
+            .iter()
+            .any(|l| l.contains("origin_check=rejected")),
+        "{:?}",
+        bare.logs
+    );
+
+    assert_eq!(engine.run(hit()).response.status, 204);
+    assert_eq!(rec.sent.lock().unwrap().len(), 1);
+    // The settings the server starts with say the same.
+    assert_eq!(
+        Container::builtin().clients[0].data["originCheck"],
+        "enforce"
+    );
+}
+
+#[test]
+fn a_transaction_sent_again_runs_once() {
+    let (engine, rec) = engine_with(client_with(|_| {}), 204);
+    let buy =
+        "v=2&tid=G-TEST000001&cid=1.2&en=purchase&epn.value=20&cu=EUR&ep.transaction_id=T-100";
+    let sends = || rec.sent.lock().unwrap().len();
+
+    let first = engine.run(ga4_hit(buy, ""));
+    assert_eq!((first.events.len(), sends()), (1, 1), "{:?}", first.logs);
+
+    // The same purchase again (a reload, a replayed hit): answered like any
+    // hit, but no tag runs and the log says why.
+    let again = engine.run(ga4_hit(buy, ""));
+    assert_eq!(again.response.status, 204);
+    assert!(again.events.is_empty() && again.tags.is_empty());
+    assert_eq!(sends(), 1);
+    assert!(
+        again
+            .logs
+            .iter()
+            .any(|l| l.contains("events_rejected=1 reason=duplicate_transaction")),
+        "{:?}",
+        again.logs
+    );
+
+    // Another order, the refund of the first one, and the same order for
+    // the site's second GA4 property are different events.
+    for q in [
+        buy.replace("T-100", "T-101"),
+        buy.replace("en=purchase", "en=refund"),
+        buy.replace("G-TEST000001", "G-TEST000002"),
+    ] {
+        let r = engine.run(ga4_hit(&q, ""));
+        assert_eq!(r.events.len(), 1, "{q}: {:?}", r.logs);
+    }
+    assert_eq!(sends(), 4);
+
+    // A batch that repeats a line runs it once; events without a
+    // transaction_id are never compared.
+    let r = engine.run(ga4_hit(
+        "v=2&tid=G-TEST000001&cid=1.2",
+        "en=purchase&ep.transaction_id=T-200\nen=purchase&ep.transaction_id=T-200\nen=scroll\nen=scroll",
+    ));
+    assert_eq!(r.events.len(), 3, "{:?}", r.logs);
+
+    // Turned off, every hit runs.
+    let (engine, rec) = engine_with(client_with(|d| d["dedupeTransactions"] = json!(false)), 204);
+    engine.run(ga4_hit(buy, ""));
+    engine.run(ga4_hit(buy, ""));
+    assert_eq!(rec.sent.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn events_without_a_usable_name_are_left_out() {
+    let (engine, rec) = engine_with(client_with(|_| {}), 204);
+    let hit =
+        |extra: &str| engine.run(ga4_hit(&format!("v=2&tid=G-TEST000001&cid=1.2{extra}"), ""));
+    let longest = "e".repeat(40);
+    assert_eq!(hit(&format!("&en={longest}")).events.len(), 1);
+
+    for bad in [
+        String::new(),
+        "&en=".to_string(),
+        format!("&en={longest}x"),
+        "&en=pur%0Achase".to_string(),
+    ] {
+        let r = hit(&bad);
+        assert_eq!(r.response.status, 204, "{bad}");
+        assert!(r.events.is_empty(), "{bad}: {:?}", r.events);
+        assert!(
+            r.logs
+                .iter()
+                .any(|l| l.contains("events_rejected=1 reason=event_name")),
+            "{bad}: {:?}",
+            r.logs
+        );
+    }
+    assert_eq!(rec.sent.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_value_beyond_the_ceiling_is_left_out() {
+    let capped = Container::builtin_with(&Settings {
+        measurement_ids: vec!["G-TEST000001".into()],
+        max_event_value: Some(1000.0),
+        ..Default::default()
+    });
+    assert_eq!(capped.clients[0].data["maxEventValue"], 1000.0);
+    let (engine, rec) = engine_with(capped, 204);
+    let hit = |engine: &Engine, value: &str| {
+        engine.run(ga4_hit(
+            &format!("v=2&tid=G-TEST000001&cid=1.2&en=purchase&{value}"),
+            "",
+        ))
+    };
+    for ok in [
+        "epn.value=1000",
+        "epn.value=19.9",
+        "ep.value=49%2C90",
+        "ep.plan=pro",
+    ] {
+        assert_eq!(hit(&engine, ok).events.len(), 1, "{ok}");
+    }
+    // As a number or as text, above the ceiling or as far below zero.
+    for bad in ["epn.value=1000.01", "ep.value=99999", "epn.value=-99999"] {
+        let r = hit(&engine, bad);
+        assert!(r.events.is_empty(), "{bad}");
+        assert!(
+            r.logs
+                .iter()
+                .any(|l| l.contains("events_rejected=1 reason=value")),
+            "{bad}: {:?}",
+            r.logs
+        );
+    }
+    assert_eq!(rec.sent.lock().unwrap().len(), 4);
+
+    // No ceiling unless one is set: the right one depends on the shop.
+    let (engine, _) = engine_with(client_with(|_| {}), 204);
+    assert!(
+        client_with(|_| {}).clients[0]
+            .data
+            .get("maxEventValue")
+            .is_none()
+    );
+    assert_eq!(hit(&engine, "epn.value=99999999").events.len(), 1);
+}
+
+#[test]
+fn a_batch_runs_no_more_events_than_a_browser_sends() {
+    let (engine, rec) = engine_with(client_with(|_| {}), 204);
+    let lines: Vec<String> = (0..60).map(|i| format!("en=scroll&epn.n={i}")).collect();
+    let r = engine.run(ga4_hit("v=2&tid=G-TEST000001&cid=1.2", &lines.join("\n")));
+    assert_eq!(r.response.status, 204);
+    assert_eq!(r.events.len(), crate::mpv2::MAX_EVENTS);
+    assert_eq!(crate::mpv2::MAX_EVENTS, 25);
+    assert_eq!(rec.sent.lock().unwrap().len(), 25);
+}
+
+/// HMAC-SHA256 of `id` with `key`, as hex: what a site signs an id with.
+fn signed(id: &str, key: &str) -> String {
+    use hmac::{Hmac, KeyInit, Mac};
+    let mut mac = <Hmac<sha2::Sha256> as KeyInit>::new_from_slice(key.as_bytes()).unwrap();
+    mac.update(id.as_bytes());
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+#[test]
+fn a_signed_lookup_needs_the_sites_signature() {
+    const KEY: &str = "0123456789abcdef-signing-key";
+    let answer = r#"{"email":"jane@example.com"}"#;
+    let mut c = providers(&[META], Some("https://shop.example/api/visitor"));
+    let meta = c
+        .tags
+        .iter_mut()
+        .find(|t| t.template == "meta_capi")
+        .unwrap();
+    meta.data["enrich"]["signingKey"] = json!(KEY);
+    let (engine, rec) = engine_answering(c, 200, answer);
+
+    let lookups = || {
+        rec.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|o| o.url.starts_with("https://shop.example"))
+            .count()
+    };
+    // The e-mail Meta got with the latest purchase, if any.
+    let email = || {
+        bodies(&rec, "https://graph.facebook.com")
+            .last()
+            .map(|(_, b)| b["data"][0]["user_data"]["em"].clone())
+            .unwrap()
+    };
+    // Each run is its own order, for the visitor PURCHASE names.
+    let order = std::cell::Cell::new(0);
+    let run = |sig: Option<&str>| {
+        order.set(order.get() + 1);
+        let mut q = PURCHASE.replace(
+            "transaction_id=T1",
+            &format!("transaction_id=S{}", order.get()),
+        );
+        if let Some(sig) = sig {
+            q.push_str(&format!("&ep.user_id_sig={sig}"));
+        }
+        engine.run(meta_hit(&q))
+    };
+    let skipped = |r: &RunResult| {
+        r.logs
+            .iter()
+            .any(|l| l.contains("enrichment skipped: user_id_sig missing or wrong"))
+    };
+
+    // No signature, a wrong one, and a right one for somebody else: nothing
+    // is asked, and the conversion still goes out, without the extra fields.
+    for sig in [
+        None,
+        Some("deadbeef"),
+        Some(signed("someone-else", KEY).as_str()),
+        Some(signed("User@Example.com", "another-key-0123456789").as_str()),
+    ] {
+        let r = run(sig);
+        assert_eq!(r.tags[1].outcome, TagOutcome::Success, "{:?}", r.logs);
+        assert!(skipped(&r), "{sig:?}: {:?}", r.logs);
+        assert_eq!(lookups(), 0, "{sig:?}");
+        assert!(email().is_null(), "{sig:?}");
+    }
+
+    // The site's signature of this id: looked up once, and matched on.
+    let right = signed("User@Example.com", KEY);
+    let r = run(Some(&right));
+    assert!(!skipped(&r), "{:?}", r.logs);
+    assert_eq!(lookups(), 1);
+    assert_eq!(email()[0], sha_hex("jane@example.com"));
+    // Upper-case hex is the same signature; the answer is reused.
+    run(Some(&right.to_uppercase()));
+    assert_eq!(lookups(), 1);
+    assert_eq!(email()[0], sha_hex("jane@example.com"));
+
+    // The kept answer is not handed to a hit that can't show the signature.
+    let r = run(None);
+    assert!(skipped(&r));
+    assert!(email().is_null());
+    assert_eq!(lookups(), 1);
+}
+
+#[test]
+fn google_ads_reports_only_the_consent_the_hit_gave() {
+    let mut fields = GOOGLE_ADS.1.to_vec();
+    fields.push(("send_without_consent", "true"));
+    let (engine, rec) = engine_answering(
+        providers(&[("google_ads", fields.as_slice())], None),
+        200,
+        GOOGLE_ANSWER,
+    );
+    let order = std::cell::Cell::new(0);
+    // The consent Google was told for a purchase with these signals.
+    let told = |signals: &str| {
+        order.set(order.get() + 1);
+        let q = PURCHASE
+            .replace("&gcs=G111&gcd=13r3r3r2r5l1", signals)
+            .replace(
+                "transaction_id=T1",
+                &format!("transaction_id=C{}", order.get()),
+            );
+        let r = engine.run(with_cookie(
+            ga4_hit(&q, ""),
+            "_sst_ads=v1.gclid.1792900000.Cj0abc.d",
+        ));
+        let tag = r
+            .tags
+            .iter()
+            .find(|t| t.tag == "Google Ads conversions")
+            .unwrap();
+        assert_eq!(tag.outcome, TagOutcome::Success, "{signals}: {:?}", r.logs);
+        let sent = bodies(&rec, "https://datamanager.googleapis.com/v1/events:ingest");
+        assert_eq!(sent.len(), order.get(), "{signals}");
+        sent.last().unwrap().1.clone()
+    };
+
+    // A hit with no Consent Mode signals (a site without it, an order from
+    // a webhook): sent because the tag allows it, and nothing is claimed.
+    let body = told("");
+    assert!(body.get("consent").is_none(), "{body}");
+    // gcs knows ad_storage and analytics_storage only.
+    let body = told("&gcs=G111");
+    assert!(body.get("consent").is_none(), "{body}");
+    // ad_user_data granted, ad_personalization not set (the letter l).
+    let body = told("&gcd=13r3r3r2l5l1");
+    assert_eq!(body["consent"], json!({ "adUserData": "CONSENT_GRANTED" }));
+    // Both given: one granted, one denied.
+    let body = told("&gcd=13r3r3r2q5l1");
+    assert_eq!(
+        body["consent"],
+        json!({ "adUserData": "CONSENT_GRANTED", "adPersonalization": "CONSENT_DENIED" })
+    );
+}
+
+#[test]
+fn a_visitor_who_denied_analytics_is_forwarded_without_the_ip() {
+    let (engine, rec) = engine_with(client_with(|_| {}), 204);
+    // The last send's address and whether it carried the visitor's IP in
+    // a header.
+    let sent = |signals: &str| {
+        let r = engine.run(ga4_hit(
+            &format!("v=2&tid=G-TEST000001&cid=1.2&en=page_view{signals}"),
+            "",
+        ));
+        assert_eq!(
+            r.tags[0].outcome,
+            TagOutcome::Success,
+            "{signals}: {:?}",
+            r.logs
+        );
+        let out = rec.sent.lock().unwrap().last().unwrap().clone();
+        let header = out.headers.iter().any(|(k, _)| k == "x-forwarded-for");
+        (out.url, header)
+    };
+
+    // Denied by gcs (its last digit) or by gcd (its second letter).
+    for denied in [
+        "&gcs=G100",
+        "&gcs=G110",
+        "&gcd=13r3q3r2r5l1",
+        "&gcs=G111&gcd=13r3p3r2r5l1",
+    ] {
+        let (url, header) = sent(denied);
+        assert!(
+            !url.contains("_uip=") && !url.contains("203.0.113.9"),
+            "{denied}: {url}"
+        );
+        assert!(!header, "{denied}");
+        // The hit itself still goes, with its consent state and user agent.
+        assert!(
+            url.contains("en=page_view") && url.contains("_ua="),
+            "{denied}: {url}"
+        );
+    }
+    // Granted, or no signal at all: as before. gcd wins over gcs.
+    for granted in [
+        "",
+        "&gcs=G111",
+        "&gcd=13r3r3r2r5l1",
+        "&gcs=G100&gcd=13r3r3r2r5l1",
+    ] {
+        let (url, header) = sent(granted);
+        assert!(url.contains("_uip=203.0.113.9"), "{granted}: {url}");
+        assert!(header, "{granted}");
+    }
+}
+
+#[test]
+fn a_template_from_a_file_never_gets_the_ad_tags_storage() {
+    // What the Meta tag keeps of a visitor it looked up.
+    const KEPT: &str = "enrich:user_id:User@Example.com";
+    let answer = r#"{"email":"jane@example.com","phone":"+491701234567"}"#;
+    let mut c = providers(&[META], Some("https://shop.example/api/visitor"));
+
+    // Two templates someone else wrote. One is installed under the name
+    // the shared storage used to have; the other begins with a copy of the
+    // ad tags' own code, which is how the server tells those apart.
+    let named = format!(
+        "const storage = require('templateDataStorage');\n\
+         const log = require('logToConsole');\n\
+         const JSON = require('JSON');\n\
+         log('seen=' + JSON.stringify(storage.getItemCopy('{KEPT}') || null));\n\
+         data.gtmOnSuccess();"
+    );
+    let copied = format!(
+        "{}\nlogToConsole('seen=' + JSON.stringify(templateDataStorage.getItemCopy('{KEPT}') || null));\n\
+         data.gtmOnSuccess();",
+        include_str!("../templates/provider_common.js")
+    );
+    let everything = json!({
+        "access_template_storage": {}, "logging": {},
+        "read_event_data": { "keys": ["*"] }, "get_cookies": { "names": ["*"] },
+        "send_http": { "urls": ["*"] },
+    });
+    for (name, src) in [("provider_common", named), ("copycat", copied)] {
+        c.templates.insert(name.into(), src);
+        c.permissions.insert(
+            name.into(),
+            crate::permissions::from_json(&everything).unwrap(),
+        );
+        c.tags
+            .push(serde_json::from_value(json!({ "name": name, "template": name })).unwrap());
+    }
+    c.compile().unwrap();
+    let (engine, _) = engine_answering(c, 200, answer);
+
+    engine.run(meta_hit(PURCHASE));
+    // The answer is kept, in the map only the server's own tags share.
+    {
+        let storage = engine.storage.lock().unwrap();
+        assert!(storage["shared:providers"].contains_key(KEPT));
+        assert!(!storage.contains_key("provider_common"));
+    }
+    // The next order: the answer is there for the Meta tag, and neither
+    // outside template can read it.
+    let r = engine.run(meta_hit(
+        &PURCHASE.replace("transaction_id=T1", "transaction_id=T2"),
+    ));
+    for name in ["provider_common", "copycat"] {
+        let tag = r.tags.iter().find(|t| t.tag == name).unwrap();
+        assert_eq!(tag.outcome, TagOutcome::Success, "{name}: {:?}", r.logs);
+        assert!(
+            r.logs.contains(&format!("[{name}] seen=null")),
+            "{name}: {:?}",
+            r.logs
+        );
+    }
+    assert!(!r.logs.iter().any(|l| l.contains("jane@example.com")));
+}
+
+#[test]
+fn a_site_without_consent_mode_can_have_its_cookies_kept() {
+    let hit = |signals: &str| {
+        with_header(
+            ga4_hit(&format!("v=2&tid=G-ABC&en=page_view{signals}"), ""),
+            "cookie",
+            Some("_ga=GA1.1.1.2; _fbp=fb.1.1.2; _gcl_aw=GCL.1.abc"),
+        )
+    };
+    let names = |r: &RunResult| -> Vec<String> {
+        set_cookies(r)
+            .iter()
+            .map(|c| c.split('=').next().unwrap().to_string())
+            .collect()
+    };
+    let data = |without: bool| {
+        let mut d = json!({ "keepCookies": ["google_ads"] });
+        if without {
+            d["cookiesWithoutConsent"] = json!(true);
+        }
+        d
+    };
+
+    // As the server starts: a hit that says nothing has no cookie kept.
+    let (engine, _) = engine_with(with_client_data(data(false)), 204);
+    assert!(names(&engine.run(hit(""))).is_empty());
+    assert_eq!(
+        names(&engine.run(hit("&gcs=G111"))),
+        ["_ga", "_gcl_aw", "_fbp"]
+    );
+
+    // The site says it doesn't use Consent Mode: a signal the hit doesn't
+    // carry counts as granted.
+    let (engine, _) = engine_with(with_client_data(data(true)), 204);
+    assert_eq!(names(&engine.run(hit(""))), ["_ga", "_gcl_aw", "_fbp"]);
+    // One that says denied still stops its cookies, each kind on its own.
+    assert!(names(&engine.run(hit("&gcs=G100"))).is_empty());
+    assert_eq!(names(&engine.run(hit("&gcs=G101"))), ["_ga"]);
+    assert_eq!(names(&engine.run(hit("&gcs=G110"))), ["_gcl_aw", "_fbp"]);
+    assert_eq!(
+        names(&engine.run(hit("&gcd=13q3l3r2r5l1"))),
+        ["_ga"],
+        "ad_storage denied, analytics_storage not said"
+    );
+}
+
+#[test]
+fn page_addresses_keep_only_campaign_and_click_id_parameters() {
+    let page = "https://example.com/reset?email=jane%40example.com&token=abc123&utm_source=news&utm_medium=email\
+        &gclid=Cj0abc&q=red+shoes&fbclid=fb-1&page=2&gc_id=alias-1";
+    let referrer =
+        "https://example.com/search?q=private+matter&utm_campaign=spring#access_token=secret";
+    let enc = |s: &str| -> String { form_urlencoded::byte_serialize(s.as_bytes()).collect() };
+    let query = format!(
+        "v=2&tid=G-TEST000001&cid=1.2&en=page_view&dl={}&dr={}",
+        enc(page),
+        enc(referrer)
+    );
+    let run = |data: serde_json::Value| {
+        let mut c = client_with(|d| {
+            for (k, v) in data.as_object().unwrap() {
+                d[k] = v.clone();
+            }
+        });
+        c.compile().unwrap();
+        let (engine, rec) = engine_with(c, 204);
+        let r = engine.run(ga4_hit(&query, ""));
+        let url = rec.sent.lock().unwrap()[0].url.clone();
+        (r.events[0].clone(), url)
+    };
+
+    // Off unless set: the tags get the address as the site sent it.
+    let (event, _) = run(json!({}));
+    assert_eq!(event["page_location"], page);
+    assert_eq!(event["page_referrer"], referrer);
+
+    let (event, sent) = run(json!({ "stripUrlParams": true }));
+    assert_eq!(
+        event["page_location"],
+        "https://example.com/reset?utm_source=news&utm_medium=email&gclid=Cj0abc&fbclid=fb-1"
+    );
+    // The referrer too, and a fragment that holds parameters with it.
+    assert_eq!(
+        event["page_referrer"],
+        "https://example.com/search?utm_campaign=spring"
+    );
+    // What Google gets is the trimmed address, not the hit's own.
+    for gone in ["jane", "abc123", "red", "private", "access_token", "secret"] {
+        assert!(!sent.contains(gone), "{gone} in {sent}");
+    }
+    assert!(
+        sent.contains("utm_source%3Dnews") && sent.contains("gclid%3DCj0abc"),
+        "{sent}"
+    );
+
+    // Names the site asks to keep, and its click id aliases, stay.
+    let (event, _) = run(json!({
+        "stripUrlParams": true, "keepUrlParams": ["page"], "clickIdAliases": { "msclkid": "gc_id" }
+    }));
+    assert_eq!(
+        event["page_location"],
+        "https://example.com/reset?utm_source=news&utm_medium=email&gclid=Cj0abc&fbclid=fb-1&page=2&gc_id=alias-1&msclkid=alias-1"
+    );
+
+    // A route in the fragment is the page; an address without a query, or
+    // none at all, is left alone.
+    let plain = |dl: &str| {
+        let mut c = client_with(|d| d["stripUrlParams"] = json!(true));
+        c.compile().unwrap();
+        let (engine, _) = engine_with(c, 204);
+        let r = engine.run(ga4_hit(
+            &format!("v=2&tid=G-TEST000001&cid=1.2&en=page_view{dl}"),
+            "",
+        ));
+        r.events[0]["page_location"].clone()
+    };
+    assert_eq!(
+        plain(&format!(
+            "&dl={}",
+            enc("https://example.com/app?id=7#/cart")
+        )),
+        "https://example.com/app#/cart"
+    );
+    assert_eq!(
+        plain(&format!("&dl={}", enc("https://example.com/"))),
+        "https://example.com/"
+    );
+    assert!(plain("").is_null());
+    // A name that only looks like a kept one, or like something every
+    // object has, is not kept.
+    assert_eq!(
+        plain(&format!(
+            "&dl={}",
+            enc("https://example.com/?utm_sourcex=1&constructor=2&__proto__=3&Gclid=4")
+        )),
+        "https://example.com/"
+    );
+}
+
+#[test]
+fn user_data_is_brought_to_each_platforms_form_before_hashing() {
+    // What a site's own server answers, written the way people write it.
+    let answer = r#"{"email":" Jane@Example.com ","phone":"0170 123 45 67","first_name":" Anne-Marie ","last_name":"O'Brien",
+        "city":"St. Louis","state":"New York","zip":"94035-1234","country":"US"}"#;
+    let user = |code: Option<&str>, answer: &str| {
+        let mut c = providers(
+            &[META, PINTEREST, TIKTOK],
+            Some("https://shop.example/api/visitor"),
+        );
+        if let Some(code) = code {
+            for t in c.tags.iter_mut().filter(|t| t.template != "ga4_tag") {
+                t.data["phoneCountryCode"] = json!(code);
+            }
+        }
+        let (engine, rec) = engine_answering(c, 200, answer);
+        let r = engine.run(meta_hit(PURCHASE));
+        assert!(
+            r.tags[1..].iter().all(|t| t.outcome == TagOutcome::Success),
+            "{:?} {:?}",
+            r.tags,
+            r.logs
+        );
+        (
+            bodies(&rec, "https://graph.facebook.com")[0].1["data"][0]["user_data"].clone(),
+            bodies(&rec, "https://api.pinterest.com")[0].1["data"][0]["user_data"].clone(),
+            bodies(&rec, "https://business-api.tiktok.com")[0].1["data"][0]["user"].clone(),
+        )
+    };
+
+    let (meta, pinterest, tiktok) = user(Some("49"), answer);
+    assert_eq!(meta["em"][0], sha_hex("jane@example.com"));
+    // The trunk zero goes and the country code comes first.
+    assert_eq!(meta["ph"][0], sha_hex("491701234567"));
+    assert_eq!(pinterest["ph"][0], sha_hex("491701234567"));
+    assert_eq!(tiktok["phone"], sha_hex("+491701234567"));
+    // Meta: names without punctuation; places without spaces or
+    // punctuation; a US ZIP+4 as its five digits; the country as its code.
+    assert_eq!(meta["fn"][0], sha_hex("annemarie"));
+    assert_eq!(meta["ln"][0], sha_hex("obrien"));
+    assert_eq!(meta["ct"][0], sha_hex("stlouis"));
+    assert_eq!(meta["st"][0], sha_hex("newyork"));
+    assert_eq!(meta["zp"][0], sha_hex("94035"));
+    assert_eq!(meta["country"][0], sha_hex("us"));
+    // Pinterest: the same places, names in lower case as they are.
+    assert_eq!(pinterest["ct"][0], sha_hex("stlouis"));
+    assert_eq!(pinterest["zp"][0], sha_hex("94035"));
+    assert_eq!(pinterest["fn"][0], sha_hex("anne-marie"));
+    assert_eq!(pinterest["ln"][0], sha_hex("o'brien"));
+
+    // Other ways of writing the same number and place give the same hash.
+    for phone in [
+        "+49 170 1234567",
+        "0049 (170) 123-4567",
+        "49 170 1234567",
+        "170 1234567",
+    ] {
+        let a = format!(r#"{{"phone":"{phone}","city":"saint-louis","zip":"M1 1AE"}}"#);
+        let (meta, _, tiktok) = user(Some("49"), &a);
+        assert_eq!(meta["ph"][0], sha_hex("491701234567"), "{phone}");
+        assert_eq!(tiktok["phone"], sha_hex("+491701234567"), "{phone}");
+        assert_eq!(meta["ct"][0], sha_hex("saintlouis"));
+        assert_eq!(meta["zp"][0], sha_hex("m11ae"));
+    }
+    // Letters beyond a to z are letters; a postcode's dash goes.
+    let (meta, _, _) = user(
+        None,
+        r#"{"city":"Şanlıurfa","zip":"00-950","first_name":"Ayşe Nur"}"#,
+    );
+    assert_eq!(meta["ct"][0], sha_hex("şanlıurfa"));
+    assert_eq!(meta["zp"][0], sha_hex("00950"));
+    assert_eq!(meta["fn"][0], sha_hex("ayşe nur"));
+
+    // Without a country code a national number is only its digits, and a
+    // value that is already a digest is passed on.
+    let digest = sha_hex("anything");
+    let a = format!(
+        r#"{{"phone":"0170 1234567","city":"{digest}","zip":"{digest}","first_name":"{digest}"}}"#
+    );
+    let (meta, _, tiktok) = user(None, &a);
+    assert_eq!(meta["ph"][0], sha_hex("1701234567"));
+    assert_eq!(tiktok["phone"], sha_hex("+1701234567"));
+    assert_eq!(meta["ct"][0], digest);
+    assert_eq!(meta["zp"][0], digest);
+    assert_eq!(meta["fn"][0], digest);
+    // An international number never gets the code added.
+    let (meta, _, _) = user(Some("49"), r#"{"phone":"+90 555 111 22 33"}"#);
+    assert_eq!(meta["ph"][0], sha_hex("905551112233"));
 }
